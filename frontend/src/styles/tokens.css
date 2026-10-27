@@ -1,0 +1,95 @@
+/* ── Design tokens ─────────────────────────────────────────────────────────── */
+
+:root {
+  /* Brand colors - OKLCH for perceptual uniformity */
+  --color-brand-50: oklch(97% 0.02 265);
+  --color-brand-100: oklch(94% 0.04 265);
+  --color-brand-200: oklch(88% 0.08 265);
+  --color-brand-300: oklch(80% 0.12 265);
+  --color-brand-400: oklch(70% 0.16 265);
+  --color-brand-500: oklch(58% 0.20 265); /* primary brand */
+  --color-brand-600: oklch(50% 0.20 265);
+  --color-brand-700: oklch(42% 0.18 265);
+  --color-brand-800: oklch(34% 0.14 265);
+  --color-brand-900: oklch(26% 0.10 265);
+
+  /* Neutral ramp */
+  --color-neutral-0: oklch(99% 0 0);
+  --color-neutral-50: oklch(97% 0.005 265);
+  --color-neutral-100: oklch(94% 0.008 265);
+  --color-neutral-200: oklch(88% 0.010 265);
+  --color-neutral-300: oklch(80% 0.010 265);
+  --color-neutral-400: oklch(68% 0.010 265);
+  --color-neutral-500: oklch(55% 0.010 265);
+  --color-neutral-600: oklch(42% 0.010 265);
+  --color-neutral-700: oklch(30% 0.010 265);
+  --color-neutral-800: oklch(20% 0.008 265);
+  --color-neutral-900: oklch(14% 0.006 265);
+  --color-neutral-950: oklch(10% 0.004 265);
+
+  /* Semantic colors */
+  --color-success: oklch(62% 0.18 145);
+  --color-warning: oklch(72% 0.18 80);
+  --color-danger: oklch(58% 0.22 25);
+  --color-info: oklch(60% 0.18 230);
+
+  /* Surface roles */
+  --surface-page: var(--color-neutral-50);
+  --surface-card: var(--color-neutral-0);
+  --surface-raised: var(--color-neutral-0);
+  --surface-sunken: var(--color-neutral-100);
+  --border-default: var(--color-neutral-200);
+  --border-strong: var(--color-neutral-300);
+
+  /* Text roles */
+  --text-primary: var(--color-neutral-900);
+  --text-secondary: var(--color-neutral-600);
+  --text-muted: var(--color-neutral-400);
+  --text-on-brand: oklch(99% 0 0);
+
+  /* Spacing (8-unit grid) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* Typography */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', sans-serif;
+  --font-mono: 'SF Mono', 'Fira Code', monospace;
+  --text-xs: 12px;
+  --text-sm: 14px;
+  --text-base: 15px;
+  --text-lg: 17px;
+  --text-xl: 20px;
+  --text-2xl: 24px;
+  --text-3xl: 30px;
+  --leading-tight: 1.3;
+  --leading-normal: 1.6;
+  --leading-loose: 1.8;
+
+  /* Radii */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 3px oklch(0% 0 0 / 0.06), 0 1px 2px oklch(0% 0 0 / 0.04);
+  --shadow-md: 0 4px 12px oklch(0% 0 0 / 0.08),
+    0 2px 4px oklch(0% 0 0 / 0.04);
+  --shadow-lg: 0 8px 24px oklch(0% 0 0 / 0.10),
+    0 4px 8px oklch(0% 0 0 / 0.06);
+
+  /* Motion */
+  --duration-fast: 120ms;
+  --duration-normal: 200ms;
+  --duration-slow: 300ms;
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+}

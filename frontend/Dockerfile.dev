@@ -1,0 +1,19 @@
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Copy dependency manifests first for layer caching.
+# node_modules is mounted as an anonymous volume to avoid overwriting
+# the container's installed packages with the host's node_modules.
+COPY package.json package-lock.json* ./
+
+RUN npm install
+
+# Source is mounted at runtime via volume for hot reload.
+COPY . .
+
+EXPOSE 5173
+
+# --host 0.0.0.0 is required so Vite's dev server is reachable from outside
+# the container (i.e. from the host browser at localhost:5173).
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
