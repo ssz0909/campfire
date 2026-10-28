@@ -57,6 +57,10 @@
       </AppCard>
       <AppCard v-if="project.quality_check_result?.note">{{ project.quality_check_result.note }}</AppCard>
       <AppCard v-if="project.status === 'failed'">重新执行会复用已成功的镜头，重新生成失败镜头，可能产生新的模型费用。提交结果不确定时会阻止重试并提示核对中转任务。</AppCard>
+      <AppCard v-if="project.shots?.some(s=>s.purpose)">
+        <h2 class="section-title">分镜与节奏 · {{ project.target_duration_seconds }}秒</h2>
+        <p v-for="shot in project.shots" :key="shot.id">{{ shot.sequence_number }} · {{ shot.duration_seconds }}秒 · {{ shot.purpose }} · {{ shot.framing }} · {{ shot.camera_movement }}<br>{{ shot.visual_description }}</p>
+      </AppCard>
       <AppCard v-if="sourceAssets.length" class="source-assets"><h2 class="section-title">本片使用素材</h2><div v-for="asset in sourceAssets" :key="asset.id">{{ asset.name }} · {{ asset.category || '未分类' }} · {{ (asset.tags||[]).join('、') }}</div></AppCard>
       <AppCard v-if="project.publish_title" class="publish-copy">
         <h2 class="section-title">发布文案</h2>

@@ -16,7 +16,7 @@ class VideoProjectCreate(BaseModel):
     product_name: str | None = None
     key_selling_points: str | None = None
     video_theme: str | None = None
-    target_duration_seconds: int | None = Field(default=None, ge=1, le=120)
+    target_duration_seconds: int | None = Field(default=None, ge=15, le=60)
     aspect_ratio: Literal['9:16', '16:9', '1:1'] = "9:16"
     video_style: str | None = None
     voiceover_language: str | None = None
@@ -24,7 +24,7 @@ class VideoProjectCreate(BaseModel):
     cta_text: str | None = None
     budget_limit_cents: int | None = None
     reference_asset_id: uuid.UUID | None = None
-    selected_asset_ids: list[uuid.UUID] = Field(default_factory=list, max_length=5)
+    selected_asset_ids: list[uuid.UUID] = Field(default_factory=list, max_length=40)
     digital_employee_id: uuid.UUID | None = None
 
 
@@ -35,13 +35,13 @@ class VideoProjectUpdate(BaseModel):
     product_name: str | None = None
     key_selling_points: str | None = None
     video_theme: str | None = None
-    target_duration_seconds: int | None = Field(default=None, ge=1, le=120)
+    target_duration_seconds: int | None = Field(default=None, ge=15, le=60)
     aspect_ratio: Literal['9:16', '16:9', '1:1'] | None = None
     video_style: str | None = None
     voiceover_language: str | None = None
     subtitle_required: bool | None = None
     cta_text: str | None = None
-    selected_asset_ids: list[uuid.UUID] | None = Field(default=None, max_length=5)
+    selected_asset_ids: list[uuid.UUID] | None = Field(default=None, max_length=40)
     budget_limit_cents: int | None = None
 
 

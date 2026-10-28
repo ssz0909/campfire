@@ -71,6 +71,7 @@
                 <p class="shot-card__label">{{ t('Visual Description') }}</p>
                 <p class="shot-card__text">{{ shot.visual_description }}</p>
               </div>
+              <p v-if="shot.purpose">{{ shot.purpose }} · {{ shot.framing }} · {{ shot.camera_movement }}</p>
               <div v-if="shot.voiceover_text">
                 <p class="shot-card__label">{{ t('Voiceover') }}</p>
                 <p class="shot-card__text shot-card__text--muted">{{ shot.voiceover_text }}</p>

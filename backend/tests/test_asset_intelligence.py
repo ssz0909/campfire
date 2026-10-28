@@ -128,7 +128,7 @@ def test_multi_image_requires_model_and_public_reference_url(db, monkeypatch):
     from app.schemas.video_project import VideoProjectCreate
     project = VideoService(db).create_project(company.id, user.id, VideoProjectCreate(
         title='test', creation_mode='reference_inspired', selected_asset_ids=[a.id for a in images]))
-    assert project.target_duration_seconds == 10
+    assert project.target_duration_seconds == 30
     monkeypatch.setattr(settings, 'PUBLIC_BASE_URL', '')
     with pytest.raises(HTTPException, match='VIDEO_BASE_URL'):
         VideoService(db).start_generation(company.id, project.id)

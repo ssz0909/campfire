@@ -30,7 +30,7 @@ export const videoProjectsApi = {
   },
 
   updateStoryboard(companyId: string, projectId: string, shots: Partial<VideoProject['shots']>): Promise<{ data: VideoProject }> {
-    return apiClient.patch(`/companies/${companyId}/video-projects/${projectId}/storyboard`, { shots })
+    return apiClient.patch(`/companies/${companyId}/video-projects/${projectId}/storyboard`, { storyboard: shots })
   },
 
   regenerateShot(companyId: string, projectId: string, shotId: string): Promise<{ data: VideoProject }> {
@@ -42,6 +42,6 @@ function normalize(response: any) {
   const p = response.data
   p.status = p.project_status || p.status
   p.final_video_url = p.output_video_url || p.final_video_url
-  p.shots = p.storyboard || p.shots || []
+  p.shots = (p.storyboard || p.shots || []).map((s: any, i: number) => ({ ...s, id: s.id || String(s.shot_number || i+1), sequence_number: s.sequence_number || s.shot_number || i+1, status: s.status || (s.generation_status === 'completed' ? 'ready' : 'pending') }))
   return response
 }

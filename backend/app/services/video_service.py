@@ -28,7 +28,7 @@ class VideoService:
         if values.get('reference_asset_id') and not values.get('selected_asset_ids'):
             values['selected_asset_ids']=[values['reference_asset_id']]
         values['selected_asset_ids']=[str(v) for v in self._validate_selected_assets(company_id,values.get('selected_asset_ids') or [])]
-        values['target_duration_seconds'] = max(values.get('target_duration_seconds') or 5, 5*len(values['selected_asset_ids']))
+        values['target_duration_seconds'] = values.get('target_duration_seconds') or 30
         if values.get('reference_asset_id') and values['reference_asset_id'] not in [uuid.UUID(v) for v in values['selected_asset_ids']]:
             raise HTTPException(422,'首帧图片必须包含在本项目已选素材中')
         if not values.get('reference_asset_id') and values['selected_asset_ids']:
@@ -88,11 +88,14 @@ class VideoService:
     ) -> VideoProject:
         project = self.get_project(company_id, project_id)
         updates=data.model_dump(exclude_unset=True)
+        if any(key in updates for key in ('selected_asset_ids','target_duration_seconds','aspect_ratio')):
+            if project.project_status!='draft':raise HTTPException(409,'只能在生成前调整分镜、时长和素材')
+            project.storyboard=None
         if 'selected_asset_ids' in updates:
             if project.project_status!='draft':raise HTTPException(409,'只能在生成前调整素材；已提交或完成的视频需另建项目')
             updates['selected_asset_ids']=[str(v) for v in self._validate_selected_assets(company_id,updates['selected_asset_ids'] or [])]
             project.reference_asset_id=uuid.UUID(updates['selected_asset_ids'][0]) if updates['selected_asset_ids'] else None
-            updates['target_duration_seconds'] = max(updates.get('target_duration_seconds') or project.target_duration_seconds or 5, 5*len(updates['selected_asset_ids']))
+            updates['target_duration_seconds'] = updates.get('target_duration_seconds') or project.target_duration_seconds or 30
         for field, value in updates.items():
             setattr(project, field, value)
         self.db.commit()
@@ -102,7 +105,7 @@ class VideoService:
     def _validate_selected_assets(self,company_id,asset_ids):
         from app.models.asset import Asset
         ids=list(dict.fromkeys(uuid.UUID(str(v)) for v in asset_ids))
-        if len(ids)>5:raise HTTPException(422,'最多选择 5 张图片素材')
+        if len(ids)>40:raise HTTPException(422,'15至60秒视频最多选择40张候选图片')
         if not ids:return []
         assets=self.db.query(Asset).filter(Asset.company_id==company_id,Asset.id.in_(ids),
             Asset.asset_type=='image',Asset.is_deleted==False,Asset.is_available==True,
@@ -159,6 +162,15 @@ class VideoService:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if retry:
             self._prepare_retry(project)
+        if not retry and project.selected_asset_ids and not project.storyboard:
+            from app.services.video_director import fallback_plan
+            from app.models.asset import Asset
+            ids=[uuid.UUID(str(v)) for v in project.selected_asset_ids]
+            assets=self.db.query(Asset).filter(Asset.company_id==company_id,Asset.id.in_(ids)).all()
+            by_id={str(a.id):a for a in assets}
+            descriptors=[{'id':str(v),'name':by_id[str(v)].name,'description':((by_id[str(v)].asset_metadata or {}).get('vision_analysis') or {}).get('visual_description') or by_id[str(v)].source_description} for v in ids]
+            project.target_duration_seconds=max(15,min(60,project.target_duration_seconds or 30))
+            project.storyboard=fallback_plan(descriptors,project.target_duration_seconds)
         project.quality_check_result = None
         project.review_status = 'pending_review'
         project.project_status = "analyzing"
@@ -238,7 +250,13 @@ class VideoService:
         data: StoryboardUpdate,
     ) -> VideoProject:
         project = self.get_project(company_id, project_id)
-        project.storyboard = data.storyboard
+        if project.project_status != 'draft':
+            raise HTTPException(409,'分镜提交生成后不能修改，请另建项目以免复用错误的生成任务')
+        from app.services.video_director import validate_plan
+        try:
+            project.storyboard = validate_plan(data.storyboard,[{'id':str(v)} for v in project.selected_asset_ids or []],project.target_duration_seconds or 30)
+        except ValueError as exc:
+            raise HTTPException(422,str(exc)) from exc
         self.db.commit()
         self.db.refresh(project)
         return project

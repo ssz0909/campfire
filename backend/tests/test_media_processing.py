@@ -30,7 +30,8 @@ def test_reference_image_normalization_preserves_subject(size):
     assert normalized.getpixel((360,640))[0] > 200
 
 @pytest.mark.skipif(not shutil.which('ffmpeg') or not shutil.which('ffprobe'), reason='FFmpeg tools required')
-def test_mixed_orientation_clips_with_and_without_audio_are_unified(tmp_path):
+@pytest.mark.parametrize('durations,expected', [(0.5,1.0), ([0.25,0.5],0.75)])
+def test_mixed_orientation_clips_with_and_without_audio_are_unified(tmp_path,durations,expected):
     from app.services.media_processing import assemble_model_clips
     clips = []
     for number, size in enumerate(('320x180', '180x320')):
@@ -40,8 +41,8 @@ def test_mixed_orientation_clips_with_and_without_audio_are_unified(tmp_path):
             args += ['-f','lavfi','-i','sine=frequency=440:sample_rate=48000','-c:a','aac']
         subprocess.run(args + ['-t','0.5','-c:v','libx264',str(source)], check=True, capture_output=True, timeout=30)
         clips.append(source.read_bytes())
-    content = assemble_model_clips(clips, '9:16', 0.5)
+    content = assemble_model_clips(clips, '9:16', durations)
     metadata, thumbnail = inspect_video(content)
     assert (metadata['width'], metadata['height']) == (720,1280)
-    assert 0.9 < metadata['duration_seconds'] < 1.3
+    assert expected-0.1 < metadata['duration_seconds'] < expected+0.3
     assert thumbnail.startswith(bytes([255,216]))

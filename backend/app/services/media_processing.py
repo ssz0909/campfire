@@ -11,13 +11,24 @@ def video_dimensions(aspect_ratio):
         raise ValueError('画面比例仅支持 9:16、16:9、1:1')
     return dimensions[aspect_ratio]
 
-def normalize_reference_image(content, aspect_ratio):
+def normalize_reference_image(content, aspect_ratio, framing=None, focal_x=0.5, focal_y=0.5):
     """Preserve the entire subject, with a blurred backdrop for mismatched frames."""
     import io
     from PIL import Image, ImageOps, ImageFilter
     size = video_dimensions(aspect_ratio)
     with Image.open(io.BytesIO(content)) as raw:
         image = ImageOps.exif_transpose(raw).convert('RGB')
+        if framing:
+            # Director-led cover crop: never teach the model blurred letterbox bands.
+            zoom = {'wide':1.0, 'medium':1.12, 'detail':1.3}[framing]
+            width, height = image.size
+            crop_width, crop_height = width/zoom, height/zoom
+            left = min(max(width*focal_x-crop_width/2, 0), width-crop_width)
+            top = min(max(height*focal_y-crop_height/2, 0), height-crop_height)
+            image = image.crop((round(left),round(top),round(left+crop_width),round(top+crop_height)))
+            image = ImageOps.fit(image, size, centering=(focal_x,focal_y))
+            buffer = io.BytesIO(); image.save(buffer, 'JPEG', quality=95)
+            return buffer.getvalue()
         background = ImageOps.fit(image, size).filter(ImageFilter.GaussianBlur(32))
         foreground = ImageOps.contain(image, size)
         background.paste(foreground, ((size[0]-foreground.width)//2, (size[1]-foreground.height)//2))
@@ -28,6 +39,9 @@ def normalize_reference_image(content, aspect_ratio):
 def assemble_model_clips(clips, aspect_ratio, duration):
     """Normalize model output dimensions and audio before concatenation."""
     width, height = video_dimensions(aspect_ratio)
+    durations = list(duration) if isinstance(duration, (list, tuple)) else [duration]*len(clips)
+    if len(durations) != len(clips) or any(value <= 0 for value in durations):
+        raise ValueError('镜头剪辑时长与片段数量不匹配')
     with tempfile.TemporaryDirectory(prefix='aiops-model-clips-') as directory:
         root = Path(directory)
         normalized = []
@@ -47,7 +61,7 @@ def assemble_model_clips(clips, aspect_ratio, duration):
                 '[back][front]overlay=(W-w)/2:(H-h)/2,setsar=1,fps=24,format=yuv420p[outv]')
             args += ['-filter_complex',filters,'-map','[outv]','-map','0:a:0' if has_audio else '1:a:0',
                 '-c:v','libx264','-preset','veryfast','-c:a','aac','-ar','48000','-ac','2',
-                '-af','apad','-t',str(duration),'-movflags','+faststart',str(output)]
+                '-af','apad','-t',str(durations[index]),'-movflags','+faststart',str(output)]
             subprocess.run(args, capture_output=True, check=True, timeout=240)
             normalized.append(output)
         manifest = root / 'clips.txt'

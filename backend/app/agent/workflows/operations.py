@@ -80,8 +80,10 @@ class OperationsWorkflow:
         if role=='video_producer':
             from app.services.asset_selection import select_assets_for_video
             selected_assets=select_assets_for_video(db,company_id,goal)
+            from app.services.video_director import target_duration
+            video_duration=target_duration(task.input_params, (task.input_params or {}).get('execution_goal') or goal)
             sources['selected_assets']=[{'id':str(a.id),'name':a.name,'category':a.category,'tags':a.tags or [],
-                'description':a.source_description or ((a.asset_metadata or {}).get('vision_analysis') or {}).get('visual_description')} for a in selected_assets]
+                'width':a.width,'height':a.height, 'description':((a.asset_metadata or {}).get('vision_analysis') or {}).get('visual_description') or a.source_description} for a in selected_assets]
         feedback_id = (task.input_params or {}).get('feedback_publish_job_id')
         if feedback_id:
             import uuid
@@ -130,17 +132,17 @@ class OperationsWorkflow:
                 {"title": "发布文案草稿", "content": f"标题：在{company.name}，安排一次属于自己的放松时光\n正文：围绕“{goal}”，分享一次真实体验。你最关心住宿环境、出行便利还是服务细节？欢迎留言告诉我们。\n配图：优先选用已授权的真实环境图；房型、价格和权益需发布前核实。"},
                 {"title": "三日内容计划", "content": "第1日：环境与场景介绍，记录浏览量。\n第2日：解答一个客群常见问题，记录互动量。\n第3日：展示一条真实服务流程，记录咨询量。\n发布后手动回填各渠道数据，再由数据分析员复盘。"},
             ]
-            next_actions = [{"role": "video_producer", "title": "制作营销视频脚本", "goal": f"根据以下已审阅文案制作5秒分镜脚本：{goal}"}]
+            next_actions = [{"role": "video_producer", "title": "制作营销视频脚本", "goal": f"根据以下已审阅文案及原任务时长要求制作节奏鲜明的结构化分镜脚本：{goal}"}]
         elif role == "video_producer":
             sections += [
-                {"title": "视频制作方案", "content": f"目标：{goal}\n受众：{audience}\n规格：竖屏9:16，每个参考素材生成5秒连续动态镜头，统一比例后合成；字幕需人工复核。\n本次交付为视频模型脚本与分镜，审批后调用视频模型生成文件。"},
-                {"title": "脚本与分镜", "content": f"每个镜头5秒｜以已授权酒店环境图作为首帧｜自然推进或横移，保持主体完整并延续真实光线｜{company.name}酒店环境与入住场景｜结尾引导了解更多、咨询入住。不得虚构酒店设施、房型或价格。"},
+                {"title": "视频制作方案", "content": f"目标：{goal}\n受众：{audience}\n规格：竖屏9:16，15至60秒成片，每镜1.5至3.5秒，按叙事选材，模型片段剪取后合成；字幕需人工复核。\n本次交付为视频模型脚本与分镜，审批后调用视频模型生成文件。"},
+                {"title": "脚本与分镜", "content": f"每个成片镜头1.5至3.5秒｜以已授权酒店环境图作为首帧｜自然推进或横移，保持主体完整并延续真实光线｜{company.name}酒店环境与入住场景｜结尾引导了解更多、咨询入住。不得虚构酒店设施、房型或价格。"},
                 {"title": "素材与制作检查", "content": "\n".join(f"可选素材：{a.name}" for a in assets[:10]) or "请上传环境、房型及服务细节素材；确认授权、价格和字幕后，在视频项目中制作。"},
             ]
             if selected_assets:
                 sections.append({'title':'已选素材与镜头顺序','content':'\n'.join(
                     f"镜头{i+1}｜素材ID：{a.id}｜{a.name}｜{'、'.join(a.tags or [])}｜{a.source_description or ''}"
-                    for i,a in enumerate(selected_assets))+'\n每张素材按此顺序分别作为视频模型首帧生成动态镜头，统一画幅后合成成片。'})
+                    for i,a in enumerate(selected_assets))+'\n候选素材可重新排序；按结构化分镜选材与裁切，不要求全部使用，避免相邻重复场景。'})
         elif role == "data_analyst":
             sections += [{"title": "经营数据分析", "content": "\n".join(metric_lines)},
                          {"title": "数据质量与结论边界", "content": "同步订单不是完整经营账本。当前未接入内容曝光、点击、咨询与成交归因数据，无法计算内容转化率或ROI。\n复盘建议：确认同步范围，补充渠道数据后比较同口径的前后周期。"}]
@@ -163,6 +165,14 @@ class OperationsWorkflow:
         if employee:
             sections.append({"title": "岗位执行约束", "content": "\n".join(filter(None, [employee.work_goals, employee.system_instructions] + [str(r) for r in (employee.business_rules or [])]))})
         sections.append({"title": "数据缺口与后续补充", "content": "\n".join(gaps) or "请复核同步时间与素材授权后使用结果。"})
+        local_storyboard=[]
+        if role=='video_producer' and selected_assets:
+            from app.services.video_director import fallback_plan
+            local_storyboard=fallback_plan(sources['selected_assets'],video_duration)
+            sections.append({'title':'结构化分镜草稿','content':'\n'.join(
+                f"镜头{s['shot_number']}｜{s['duration_seconds']:.2f}秒｜{s['purpose']}｜{s['framing']}｜{s['camera_movement']}｜素材{s['source_asset_id']}" for s in local_storyboard) + f'\n按每镜5秒生成，预计{len(local_storyboard)}个模型片段，成片按分镜剪取。'})
+            if len(selected_assets)<4:
+                sections.append({'title':'素材不足提示','content':'独立场景少于4个，将重复素材并调整景别；建议补充不同场景的清晰照片。'})
         report = "\n\n".join(f"## {s['title']}\n{s['content']}" for s in sections)
         # Forbidden brand words must not leak into a publishable draft via user goals.
         for word in company.marketing_forbidden_words or []:
@@ -179,7 +189,7 @@ class OperationsWorkflow:
             from datetime import datetime, timezone
             employee.last_executed_at = datetime.now(timezone.utc)
         return {"title": task.title, "mode": "local_rules", "mode_label": "本地规则草稿（未调用大模型）",
-                **({'selected_asset_ids':[str(a.id) for a in selected_assets]} if role=='video_producer' else {}),
+                **({'video_storyboard':local_storyboard,'video_brief': {'target_duration_seconds':video_duration,'aspect_ratio':'9:16'}, 'selected_asset_ids':[str(a.id) for a in selected_assets]} if role=='video_producer' else {}),
                 "employee_name": employee.name if employee else "运营工作流", "role": role,
                 "sections": sections, "report_markdown": report, "data_sources": sources,
                 "data_gaps": gaps, "next_actions": next_actions,

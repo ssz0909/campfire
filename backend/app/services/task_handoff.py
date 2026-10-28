@@ -29,9 +29,12 @@ def create_handoffs(db, parent):
             continue
         child = OperationTask(company_id=parent.company_id, created_by=parent.created_by,
             parent_task_id=parent.id, digital_employee_id=employee.id, task_type=ROLE_TYPES[role],
-            title=action['title'][:255], input_params={'goal': action['goal'], 'auto_handoff': True},
+            title=action['title'][:255], input_params={'goal': action['goal'], 'auto_handoff': True, **({'target_duration_seconds':parent.input_params['target_duration_seconds']} if (parent.input_params or {}).get('target_duration_seconds') else {})},
             status='pending', progress=0, execution_log=[])
         child.input_params = {**child.input_params, **child_params(parent)}
+        if role in ('content_planner', 'video_producer'):
+            from app.services.video_director import target_duration
+            child.input_params = {**child.input_params, 'target_duration_seconds':target_duration(parent.input_params, (parent.input_params or {}).get('execution_goal') or (parent.input_params or {}).get('goal') or parent.title)}
         period = ((parent.output or {}).get('data_sources', {}).get('hotel') or {}).get('period')
         if period and len(period) == 2:
             child.input_params = {**child.input_params, 'date_from': period[0], 'date_to': period[1]}
@@ -56,11 +59,20 @@ def create_video_handoff(db, task):
             selected=[by_id[asset_id] for asset_id in selected_ids]
         else:
             selected=select_assets_for_video(db,task.company_id,goal)
+        from app.services.video_director import validate_plan, fallback_plan, target_duration
+        duration = target_duration((task.output or {}).get('video_brief') or task.input_params, goal)
+        descriptors = [{'id':str(a.id),'name':a.name, 'description':((a.asset_metadata or {}).get('vision_analysis') or {}).get('visual_description') or a.source_description} for a in selected]
+        raw_plan = (task.output or {}).get('video_storyboard')
+        try:
+            plan = validate_plan(raw_plan, descriptors, duration) if raw_plan else fallback_plan(descriptors, duration)
+        except ValueError as exc:
+            from fastapi import HTTPException
+            raise HTTPException(422,str(exc)) from exc
         project = VideoProject(company_id=task.company_id, created_by=task.created_by,
             digital_employee_id=task.digital_employee_id, task_id=task.id, title=task.title,
             creation_mode='prompt_to_video', marketing_goal=(task.input_params or {}).get('goal'),
             script=(task.output or {}).get('video_script') or (task.output or {}).get('report_markdown'), aspect_ratio='9:16',
-            target_duration_seconds=5*max(1,len(selected)), project_status='draft')
+            target_duration_seconds=duration, storyboard=plan, project_status='draft')
         from app.models.company import Company
         company = db.query(Company).filter_by(id=task.company_id).first()
         project.product_name = company.name if company else None

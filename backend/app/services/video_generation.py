@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 _active = set()
 _active_lock = threading.Lock()
 
-def reference_url(db, project, asset_id=None):
+def reference_url(db, project, asset_id=None, shot=None):
     reference_id = asset_id or project.reference_asset_id
     if not reference_id:
         if project.creation_mode in ('reference_inspired', 'reference_inspired_video'):
@@ -33,8 +33,11 @@ def reference_url(db, project, asset_id=None):
     if settings.STORAGE_BACKEND == 'local' and not settings.PUBLIC_BASE_URL:
         raise ValueError('本地参考图需要配置公网可访问的 PUBLIC_BASE_URL，供模型读取首帧')
     from app.services.media_processing import normalize_reference_image
-    normalized = normalize_reference_image(storage.get_file(asset.file_key), project.aspect_ratio)
-    key = f'{project.company_id}/video-references/{asset.id}-{project.aspect_ratio.replace(":", "x")}.jpg'
+    crop = {key:shot[key] for key in ('framing','focal_x','focal_y') if key in shot} if shot else {}
+    normalized = normalize_reference_image(storage.get_file(asset.file_key), project.aspect_ratio, **crop)
+    import hashlib, json
+    suffix = '-' + hashlib.sha256(json.dumps(crop, sort_keys=True).encode()).hexdigest()[:12] if crop else ''
+    key = f'{project.company_id}/video-references/{asset.id}-{project.aspect_ratio.replace(":", "x")}{suffix}.jpg'
     storage.upload_file(normalized, key, 'image/jpeg')
     url = storage.generate_presigned_url(key)
     if url.startswith('/'):
@@ -59,29 +62,42 @@ def _compose_selected_images(db, project, selected_ids):
     storage = StorageService(settings.STORAGE_BACKEND)
     client = provider()
     clips, shots = [], []
-    duration = max(float(project.target_duration_seconds or 5), 5 * len(selected_ids))
-    clip_duration = duration / len(selected_ids)
-    for number, asset_id in enumerate(selected_ids, 1):
+    planned = bool(project.storyboard and project.storyboard[0].get('planning_version') == 2)
+    if planned:
+        from app.services.video_director import validate_plan
+        plan = validate_plan(project.storyboard, [{'id':str(v)} for v in selected_ids], project.target_duration_seconds)
+        duration = project.target_duration_seconds
+    else:
+        duration = max(float(project.target_duration_seconds or 5), 5 * len(selected_ids))
+        plan = [{'source_asset_id':str(asset_id), 'duration_seconds':duration/len(selected_ids)} for asset_id in selected_ids]
+    for number, shot in enumerate(plan, 1):
+        asset_id = uuid.UUID(shot['source_asset_id'])
         asset = by_id[asset_id]
         analysis = (asset.asset_metadata or {}).get('vision_analysis') or {}
         description = analysis.get('visual_description') or asset.source_description or asset.name
-        prompt = (f'{project.script or project.marketing_goal or project.title}\n'
-                  f'现在只生成第{number}个动态镜头：{description}。保持参考图中的酒店真实环境，'
-                  f'统一{project.aspect_ratio}构图。自然缓慢推进或横移运镜，增加环境细节的自然动态，'
-                  '不得生成静态照片轮播、幻灯片、翻页或横竖屏混排。不得虚构参考图外的酒店设施。')
-        request = VideoGenerationRequest(prompt=prompt, duration_seconds=clip_duration,
+        clip_duration = shot['duration_seconds']
+        if planned:
+            prompt = (f"{shot['generation_prompt']}\n当前镜头可见事实：{description}。"
+                      f"景别：{shot['framing']}；运镜：{shot['camera_movement']}。"
+                      '只生成当前一个连续镜头，不切场景，不生成字幕、标志或文字，不添加参考图外的人物与设施；'
+                      '保持建筑直线与主体结构，避免闪烁、扭曲。动作从片段起始即自然展开。')
+        else:
+            prompt = (f'{project.script or project.marketing_goal or project.title}\n'
+                      f'现在只生成第{number}个动态镜头：{description}。保持参考图中的酒店真实环境，'
+                      f'统一{project.aspect_ratio}构图。自然缓慢推进或横移，不得生成照片轮播或虚构设施。')
+        request = VideoGenerationRequest(prompt=prompt, duration_seconds=5 if planned else clip_duration,
             aspect_ratio=project.aspect_ratio, style=project.video_style,
-            reference_image_url=reference_url(db, project, asset_id),
+            reference_image_url=reference_url(db, project, asset_id, shot=shot) if planned else reference_url(db, project, asset_id),
             resolution=settings.VIDEO_RESOLUTION, audio=settings.VIDEO_AUDIO)
         clip, task = _generate_clip(db, project, client, request, shot_number=number)
         clips.append(clip)
-        shots.append({'shot_number':number, 'visual_description':description,
+        shots.append({**shot, 'shot_number':number, 'visual_description':shot.get('visual_description') or description,
             'duration_seconds':clip_duration, 'source_asset_id':str(asset.id),
             'generation_status':'completed', 'generation_task_id':task.provider_task_id})
-        project.storyboard = list(shots)
+        project.storyboard = list(shots) + plan[number:] if planned else list(shots)
         db.commit()
     project.project_status = 'compositing'; db.commit()
-    content = assemble_model_clips(clips, project.aspect_ratio, clip_duration)
+    content = assemble_model_clips(clips, project.aspect_ratio, [s['duration_seconds'] for s in plan] if planned else clip_duration)
     key = f'{project.company_id}/generated/{uuid.uuid4()}.mp4'
     asset = Asset(company_id=project.company_id, uploaded_by=project.created_by, name=project.title,
         original_filename='generated-hotel-video.mp4', file_key=key,
@@ -234,6 +250,9 @@ def run(project_id):
             return
         selected_ids=[uuid.UUID(str(value)) for value in (project.selected_asset_ids or [])]
         client = provider()
+        if selected_ids and project.storyboard and project.storyboard[0].get('planning_version') == 2:
+            _compose_selected_images(db, project, selected_ids)
+            return
         if len(selected_ids)>1:
             _compose_selected_images(db, project, selected_ids)
             return

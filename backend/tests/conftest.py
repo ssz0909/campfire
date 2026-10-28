@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app.database import get_db
 from app.main import app
@@ -19,6 +20,7 @@ SQLALCHEMY_TEST_URL = "sqlite:///:memory:"
 engine = create_engine(
     SQLALCHEMY_TEST_URL,
     connect_args={"check_same_thread": False},
+    poolclass=StaticPool,
 )
 
 # SQLite doesn't support uuid_generate_v4(); patch server_default to use Python default

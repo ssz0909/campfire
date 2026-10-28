@@ -34,6 +34,10 @@ def test_automatic_handoff_is_scoped_acyclic_and_idempotent(db):
 
 def test_video_handoff_reuses_project(db):
     parent=setup_parent(db)
+    from tests.test_asset_intelligence import make_asset
+    from app.models.company import Company
+    from app.models.user import User
+    make_asset(db,db.get(Company,parent.company_id),db.get(User,parent.created_by),'酒店环境','landscape',[],'山景')
     a=create_video_handoff(db,parent);db.commit()
     b=create_video_handoff(db,parent)
     assert a.id==b.id
@@ -85,6 +89,9 @@ def test_full_approved_chain_creates_video_without_live_calls(client, db, monkey
     from app.models.video_project import VideoProject
     user=create_test_user(db,email='chain@example.com')
     company=create_test_company(db,user,slug='chain')
+    from tests.test_asset_intelligence import make_asset
+    make_asset(db,company,user,'酒店环境','landscape',[],'酒店真实山景')
+    monkeypatch.setattr('app.services.video_generation.reference_url',lambda *a,**k:'https://test.invalid/reference')
     monkeypatch.setattr(settings,'TASK_EXECUTION_MODE','inline')
     for k,v in [('LLM_BASE_URL','https://relay.test/v1'),('LLM_MODEL','test-model'),('LLM_API_KEY','test')]:
         monkeypatch.setattr(settings,k,v)
@@ -93,8 +100,10 @@ def test_full_approved_chain_creates_video_without_live_calls(client, db, monkey
         role=context['role']
         next_role={'operations_manager':'content_planner','content_planner':'video_producer'}.get(role)
         actions=[{'role':next_role,'title':'后续工作','goal':'酒店曝光目标'}] if next_role else []
+        from app.services.video_director import fallback_plan
+        plan=fallback_plan(context['data_sources']['selected_assets'],context['video_brief']['target_duration_seconds']) if role=='video_producer' else []
         return {'model':'test-model','input_tokens':20,'output_tokens':30,
-            'content':json.dumps({'video_script':'0–5秒，酒店环境连续动态镜头，缓慢推进，保留酒店真实特征。','sections':[{'title':'交付','content':'真实酒店环境镜头脚本'}],'next_actions':actions})}
+            'content':json.dumps({'video_storyboard':plan,'video_script':'0–5秒，酒店环境连续动态镜头，缓慢推进，保留酒店真实特征。','sections':[{'title':'交付','content':'真实酒店环境镜头脚本'}],'next_actions':actions})}
     monkeypatch.setattr('app.providers.llm.openai_provider.OpenAIProvider.complete',complete)
     monkeypatch.setattr('app.services.video_generation.provider',lambda:Mock())
     enqueue=Mock();monkeypatch.setattr('app.services.video_generation.enqueue',enqueue)

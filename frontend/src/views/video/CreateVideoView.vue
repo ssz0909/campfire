@@ -30,7 +30,7 @@
           <DocumentOutline class="mode-card__icon" aria-hidden="true" />
           <h3 class="mode-card__title">{{ t('酒店图片素材短片') }}</h3>
           <p class="mode-card__desc">
-            {{ t('选择 1 张图片作为模型首帧；选择 2 至 5 张时，本机自动合成为多图竖屏短片。') }}
+            {{ t('选择多张酒店图片，按短镜头分镜制作15至60秒视频。') }}
           </p>
         </button>
       </div>
@@ -60,6 +60,9 @@
             <n-input v-model:value="form.title" :placeholder="t('e.g. Summer Sale Campaign')" />
           </n-form-item>
 
+          <n-form-item label="成片时长（15至60秒）">
+            <n-select v-model:value="form.target_duration_seconds" :options="[15,20,30,45,60].map(value=>({label:value+'秒',value}))" />
+          </n-form-item>
           <template v-if="form.creation_mode === 'ai_creative'">
             <n-form-item :label="t('Script / Description')" path="script">
               <n-input
@@ -72,7 +75,7 @@
           </template>
 
           <template v-else>
-            <n-form-item label="选择视频素材（最多 5 张图片）" path="selected_asset_ids">
+            <n-form-item label="候选视频素材（最多40张图片）" path="selected_asset_ids">
               <n-select
                 v-model:value="form.selected_asset_ids"
                 :placeholder="t('选择图片素材')"
@@ -93,7 +96,7 @@
             </n-form-item>
           </template>
         </n-form>
-        <p class="create-hint">最多选择 5 张，每张图片调用视频模型生成至少 5 秒动态镜头，再统一画幅合成。例如 3 张图片约生成 15 秒视频，按镜头分别计费。横竖图会适配为项目比例并保留主体。请确认素材授权与排列顺序。</p>
+        <p class="create-hint">每个成片镜头约1.5至3.5秒，开头不超过2秒。建议提供多个不同场景的清晰图片；模型片段生成后按分镜剪取，按生成镜头分别计费。相同图片可能以不同景别复用，请审核裁切与主体。</p>
 
         <p v-if="errorMsg" class="create-error" role="alert">{{ errorMsg }}</p>
       </AppCard>
@@ -139,6 +142,7 @@ const form = reactive({
   script: '',
   reference_asset_id: null as string | null,
   selected_asset_ids: [] as string[],
+  target_duration_seconds: 30,
 })
 
 const rules: FormRules = {
@@ -165,7 +169,7 @@ function selectMode(mode: CreationMode) {
 
 async function handleCreate() {
   errorMsg.value = ''
-  if(form.selected_asset_ids.length>5){errorMsg.value='最多选择 5 张图片素材';return}
+  if(form.selected_asset_ids.length>40){errorMsg.value='最多选择40张候选图片素材';return}
   try {
     await formRef.value?.validate()
   } catch {
@@ -180,6 +184,7 @@ async function handleCreate() {
       reference_asset_id: form.reference_asset_id ?? undefined,
       selected_asset_ids: form.selected_asset_ids,
       aspect_ratio: '9:16',
+      target_duration_seconds: form.target_duration_seconds,
     })
     router.push(`/video/${res.data.id}`)
   } catch (err: unknown) {

@@ -33,6 +33,11 @@ export interface Shot {
   sequence_number: number
   visual_description: string
   voiceover_text?: string
+  purpose?: string
+  framing?: string
+  camera_movement?: string
+  source_asset_id?: string
+  generation_prompt?: string
   duration_seconds: number
   status: ShotStatus
   asset_url?: string
@@ -54,6 +59,7 @@ export interface VideoProject {
   selected_asset_ids?: string[] | null
   reference_analysis?: ReferenceAnalysis
   shots: Shot[]
+  target_duration_seconds?: number
   estimated_duration_seconds?: number
   estimated_cost_usd?: number
   final_video_url?: string
