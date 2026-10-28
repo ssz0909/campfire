@@ -8,6 +8,25 @@ from app.models.task import OperationTask
 from app.services.task_handoff import create_handoffs, create_video_handoff
 from tests.conftest import create_test_user, create_test_company
 
+@pytest.mark.parametrize('script', [
+    '酒店开场\n泳池体验',
+    {'title':'酒店短片','scenes':[{'duration':2,'description':'泳池体验'}]},
+    [{'description':'酒店开场'}, {'description':'泳池体验'}],
+])
+def test_script_string_and_structured_relay_outputs(script):
+    from app.agent.workflows.llm_draft import Draft
+    draft=Draft.model_validate({'sections':[{'title':'交付','content':'脚本'}],'video_script':script})
+    assert isinstance(draft.video_script,str)
+    assert '泳池体验' in draft.video_script
+
+def test_structured_script_does_not_bypass_length_or_storyboard_validation():
+    from app.agent.workflows.llm_draft import Draft
+    with pytest.raises(ValueError):
+        Draft.model_validate({'sections':[{'title':'交付','content':'脚本'}],'video_script':{'body':'x'*12001}})
+    with pytest.raises(ValueError):
+        Draft.model_validate({'sections':[{'title':'交付','content':'脚本'}],
+            'video_script':{'body':'泳池'}, 'video_storyboard':[{'source_asset_id':'invalid'}]})
+
 def setup_parent(db):
     user = create_test_user(db)
     company = create_test_company(db, user)
