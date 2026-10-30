@@ -102,6 +102,7 @@ class VideoProjectResponse(BaseModel):
     publish_title: str | None = None
     publish_description: str | None = None
     publish_platforms: list[str] = Field(default_factory=list)
+    publish_accounts: list[dict] = Field(default_factory=list)
     task_id: uuid.UUID | None = None
     created_at: datetime
     updated_at: datetime

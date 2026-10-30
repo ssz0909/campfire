@@ -18,6 +18,7 @@
       <AppCard>
         <p>{{ task.output?.employee_name ?? '数字员工' }} · {{ taskLabels[task.status] }} <span v-if="!schedule">· {{ task.progress }}%</span></p>
         <p class="hint">目标：{{ task.input_params?.goal ?? task.title }}</p>
+        <p v-if="execution?.publish_accounts?.length" class="hint">发布账号：{{ execution.publish_accounts.map(row => row.label).join('、') }}</p>
         <p v-if="task.output?.mode_label" class="hint">{{ task.output.mode_label }} · {{ task.output.notice }}</p>
         <p v-if="task.error_message" class="error">{{ task.error_message }}</p>
       </AppCard>
@@ -39,12 +40,12 @@
         <h2>运营执行闭环 · {{ execution.status === 'not_started' ? '未启动' : loopLabels[execution.status] || execution.status }}</h2>
         <p class="hint">{{ execution.notice }}</p><p>{{ execution.next_step }}</p>
         <template v-if="!task.parent_task_id && task.status === 'completed'">
-          <n-select v-model:value="targets" multiple :options="platformOptions" placeholder="选择目标发布平台（可同时选择）" />
+          <AccountPicker v-model="accountIds" :company-id="auth.currentCompanyId!" />
           <div class="actions"><n-button type="primary" :loading="busy" @click="continueExecution">{{ execution.enabled ? '继续 / 修复执行流程' : '启动执行闭环' }}</n-button></div>
           <p class="hint">逐阶段审批后自动继续。视频脚本审批会调用视频模型并产生费用，真实发布需另行审核具体成片和文案。</p>
         </template>
         <div v-for="stage in execution.stages" :key="stage.kind + stage.id" class="loop-stage">
-          <strong>{{ stage.title }}</strong> · {{ stageLabel(stage.status) }} {{ stage.platform === 'douyin' ? '抖音' : stage.platform === 'wechat_channels' ? '视频号' : '' }}
+          <strong>{{ stage.title }}</strong> · {{ stageLabel(stage.status) }} {{ stage.platform === 'douyin' ? '抖音' : stage.platform === 'wechat_channels' ? '视频号' : '' }} {{ stage.account_label || '' }}
           <p v-if="stage.error" class="error">{{ stage.error }}</p>
           <p v-if="stage.feedback_due_at" class="hint">数据回流：{{ stage.feedback_state || '等待采集' }} · {{ new Date(stage.feedback_due_at).toLocaleString() }}</p>
           <n-button size="small" @click="router.push(stage.kind === 'task' ? `/tasks/${stage.id}` : stage.kind === 'video' ? `/video/${stage.id}` : '/publishing')">查看阶段</n-button>
@@ -92,9 +93,10 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NButton, NInput, NSelect } from 'naive-ui'
+import { NButton, NInput } from 'naive-ui'
 import AppPageHeader from '@/components/common/AppPageHeader.vue'
 import AppCard from '@/components/common/AppCard.vue'
+import AccountPicker from '@/components/publishing/AccountPicker.vue'
 import AppLoader from '@/components/common/AppLoader.vue'
 import AppBadge from '@/components/common/AppBadge.vue'
 import { useAuthStore } from '@/stores/auth'
@@ -103,15 +105,14 @@ import { approvalsApi } from '@/api/approvals'
 import { taskLabels, type OperationTask, type TaskSchedule } from '@/types/task'
 const auth = useAuthStore(), route = useRoute(), router = useRouter()
 const task = ref<OperationTask | null>(null), loading = ref(true), busy = ref(false), error = ref(''), reviewNote = ref('')
-const execution = ref<ExecutionSnapshot | null>(null), targets = ref<string[]>([])
+const execution = ref<ExecutionSnapshot | null>(null), accountIds = ref<string[]>([])
 const schedule = computed(() => task.value?.input_params?.schedule as TaskSchedule | undefined)
 const scheduleRuns = ref<OperationTask[]>([])
 function toggleSchedule() { if (task.value) act(() => tasksApi.setScheduleEnabled(auth.currentCompanyId!, task.value!.id, task.value!.status !== 'scheduled')) }
 let targetsLoadedFor = ''
-const platformOptions = [{label:'抖音',value:'douyin'},{label:'视频号',value:'wechat_channels'}]
 const loopLabels: Record<string,string> = {completed:'已闭环',in_progress:'执行中',blocked:'待处理',waiting_approval:'待审批',cancelled:'已停止',pending_review:'待成片审核',published:'已发布',manual_required:'需人工确认',login_required:'需重新登录',rejected:'已退回'}
 function stageLabel(status: string) { return ({pending:'待执行',queued:'排队中',running:'执行中',completed:'阶段已完成',waiting_external:'等待外部结果',failed:'失败',cancelled:'已取消'} as Record<string,string>)[status] || loopLabels[status] || status }
-async function continueExecution() { if (task.value) await act(() => tasksApi.continueExecution(auth.currentCompanyId!, task.value!.id, targets.value)) }
+async function continueExecution() { if (task.value) await act(() => tasksApi.continueExecution(auth.currentCompanyId!, task.value!.id, [], accountIds.value)) }
 let timer: ReturnType<typeof setTimeout> | undefined
 let disposed = false
 const canCancel = computed(() => task.value && (['pending','queued','running','waiting_approval','waiting_external'].includes(task.value.status) || (execution.value?.enabled && !task.value.parent_task_id && task.value.status === 'completed' && execution.value.status !== 'completed')))
@@ -133,7 +134,7 @@ async function load() {
     const loop = await tasksApi.execution(auth.currentCompanyId!, id)
     if (disposed || route.params.id !== id) return
     execution.value = loop.data
-    if (targetsLoadedFor !== id) { targets.value = [...loop.data.publish_platforms]; targetsLoadedFor = id }
+    if (targetsLoadedFor !== id) { accountIds.value = [...(loop.data.publish_account_ids ?? [])]; targetsLoadedFor = id }
     if (['pending','queued','running','waiting_external','waiting_approval'].includes(res.data.status) || (loop.data.enabled && !['completed','cancelled'].includes(loop.data.status))) timer = setTimeout(load, 5000)
   } catch { if (!disposed) error.value = '任务加载失败，请刷新或重试。' }
   finally { if (!disposed) loading.value = false }
@@ -163,7 +164,7 @@ function createSchedule() {
   router.push({ path: '/tasks/new', query: { employee_id: task.value?.digital_employee_id,
     title: task.value?.title, goal: String(task.value?.input_params?.goal ?? ''), timing: 'daily',
     execution_loop: String(task.value?.input_params?.execution_loop ?? false),
-    platforms: (task.value?.input_params?.publish_platforms as string[] | undefined)?.join(',') ?? '' } })
+    account_ids: (task.value?.input_params?.publish_account_ids as string[] | undefined)?.join(',') ?? '' } })
 }
 function handoff(action: { role: string; title: string; goal: string }) {
   router.push({ path: '/tasks/new', query: { ...action, parent_task_id: task.value!.id } })

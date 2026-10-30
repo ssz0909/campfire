@@ -76,6 +76,7 @@ export interface VideoProject {
   publish_title?: string
   publish_description?: string
   publish_platforms?: string[]
+  publish_accounts?: {id: string; platform: string; label: string}[]
   quality_check_result?: { status?: string; note?: string }
   created_by: string
   created_at: string

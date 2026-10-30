@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_serializer
 
 class PublishRequest(BaseModel):
+    platform_connection_id: uuid.UUID | None = None
     title: str = Field(min_length=1, max_length=100)
     description: str = Field(default="", max_length=2000)
     location_name: str | None = Field(default=None, min_length=1, max_length=100)
@@ -23,6 +24,7 @@ class PlatformConnectionResponse(BaseModel):
     company_id: uuid.UUID
     platform: str
     status: str
+    label: str | None = None
     account_id: str | None = None
     account_name: str | None = None
     scopes: list | None = None
@@ -64,3 +66,12 @@ class PublishJobResponse(BaseModel):
         if path.startswith('/creator-micro/') or path.startswith('/platform/'):
             return None
         return value
+
+
+class PublishingAccountCreate(BaseModel):
+    platform: Literal['douyin', 'wechat_channels']
+    label: str = Field(min_length=1, max_length=100)
+
+
+class PublishingAccountUpdate(BaseModel):
+    label: str = Field(min_length=1, max_length=100)

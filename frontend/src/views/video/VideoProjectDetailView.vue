@@ -73,7 +73,7 @@
         <h2 class="section-title">发布文案</h2>
         <h3 class="publish-copy__title">{{ project.publish_title }}</h3>
         <p class="publish-copy__description">{{ project.publish_description }}</p>
-        <p v-if="project.publish_platforms?.length" class="publish-copy__targets">审核通过后自动发布至：{{ project.publish_platforms.map(p => p === 'douyin' ? '抖音' : '微信视频号').join('、') }}</p>
+        <p v-if="project.publish_platforms?.length" class="publish-copy__targets">审核通过后自动发布至：{{ project.publish_accounts?.length ? project.publish_accounts.map(a => a.label).join('、') : project.publish_platforms.map(p => p === 'douyin' ? '抖音' : '微信视频号').join('、') }}</p>
         <p v-else class="publish-copy__targets">尚未选择发布平台，审核后可在平台发布页选择。</p>
       </AppCard>
       <AppCard v-if="project.status === 'pending_review'" class="review-card">

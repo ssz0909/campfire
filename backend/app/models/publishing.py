@@ -9,9 +9,10 @@ from app.models.base import Base, TimestampMixin, UUIDMixin
 
 class PlatformConnection(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "platform_connections"
-    __table_args__ = (UniqueConstraint("company_id", "platform", name="uq_platform_connection_company_platform"),)
     company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"), nullable=False, index=True)
     platform: Mapped[str] = mapped_column(String(40), nullable=False)
+    label: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    session_profile: Mapped[str | None] = mapped_column(String(36), nullable=True)
     status: Mapped[str] = mapped_column(String(30), default="disconnected", nullable=False)
     account_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     account_name: Mapped[str | None] = mapped_column(String(255), nullable=True)

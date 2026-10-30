@@ -18,6 +18,7 @@ router = APIRouter()
 
 class ContinueExecution(BaseModel):
     publish_platforms: list[str] = Field(default_factory=list, max_length=2)
+    publish_account_ids: list[uuid.UUID] | None = Field(default=None, max_length=40)
 
 
 class ScheduleState(BaseModel):
@@ -59,7 +60,7 @@ def continue_execution(company_id: uuid.UUID, tid: uuid.UUID, data: ContinueExec
     from app.services.execution_loop import continue_loop, snapshot
     TaskService(db).get_task(company_id, tid)
     root = db.query(OperationTask).filter_by(id=tid, company_id=company_id).with_for_update().one()
-    created = continue_loop(db, root, data.publish_platforms)
+    created = continue_loop(db, root, data.publish_platforms, [str(value) for value in data.publish_account_ids] if data.publish_account_ids is not None else None)
     for task in created:
         dispatch_task(db, task, db.get(User, task.created_by))
     return snapshot(db, root)

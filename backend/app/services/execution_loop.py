@@ -75,7 +75,8 @@ def child_params(parent):
         return {}
     return {'execution_loop': True, 'execution_root_id': params.get('execution_root_id', str(parent.id)),
             'execution_goal': params.get('execution_goal', params.get('goal', parent.title)),
-            'publish_platforms': params.get('publish_platforms', [])}
+            'publish_platforms': params.get('publish_platforms', []),
+            **({'publish_account_ids': params['publish_account_ids']} if 'publish_account_ids' in params else {})}
 
 
 def queue_publications(db, project):
@@ -87,16 +88,30 @@ def queue_publications(db, project):
     root = assert_active(db, task)
     if project.review_status != 'approved' or project.project_status != 'completed' or not project.output_asset_id:
         raise HTTPException(409, '成片必须审核通过才能排队发布')
-    targets = (root.input_params or {}).get('publish_platforms', [])
+    from app.services.publishing_service import get_connection, get_account
+    params = root.input_params or {}
+    if 'publish_account_ids' in params:
+        connections = [get_account(db, project.company_id, uuid.UUID(value)) for value in params['publish_account_ids']]
+    else:
+        connections = []
+        for platform in params.get('publish_platforms', []):
+            connection = get_connection(db, project.company_id, platform)
+            if connection is None:
+                connection = PlatformConnection(company_id=project.company_id, platform=platform, status='disconnected')
+                db.add(connection); db.flush()
+            connections.append(connection)
     copy = (project.quality_check_result or {}).get('approved_publication') or publication_copy(db, project)
     title, description = copy['title'], copy['description']
     jobs = []
-    for platform in targets:
-        connection = db.query(PlatformConnection).filter_by(company_id=project.company_id, platform=platform).first()
-        if not connection:
-            connection = PlatformConnection(company_id=project.company_id, platform=platform, status='disconnected')
-            db.add(connection); db.flush()
-        key = f'execution:{project.id}:{platform}'
+    for connection in connections:
+        platform = connection.platform
+        key = f'execution:{project.id}:{connection.id}'
+        # Keep existing jobs and their platform-level keys for legacy tasks.
+        legacy_key = f'execution:{project.id}:{platform}'
+        old_job = db.query(PublishJob).filter_by(company_id=project.company_id, request_key=legacy_key, platform_connection_id=connection.id).first()
+        if old_job:
+            jobs.append(old_job)
+            continue
         job = db.query(PublishJob).filter_by(company_id=project.company_id, request_key=key).first()
         if job is None:
             job = PublishJob(company_id=project.company_id, platform_connection_id=connection.id,
@@ -106,7 +121,9 @@ def queue_publications(db, project):
                 content_snapshot={'execution_root_id':str(root.id), 'platform':platform,
                                   'asset_id':str(project.output_asset_id), 'title':title,
                                   'description':description,
-                                  'location_name':publication_location(db, project.company_id)})
+                                  'location_name':publication_location(db, project.company_id),
+                                  'platform_connection_id':str(connection.id),
+                                  'account_label':connection.label or connection.account_name or platform})
             db.add(job); db.flush()
         jobs.append(job)
     task.output = {**(task.output or {}), 'publish_job_ids':[str(j.id) for j in jobs]}
@@ -168,17 +185,21 @@ def publish_approved_project(project_id):
         dispatch_queued_publications(db, project_id)
 
 
-def continue_loop(db, root, platforms):
+def continue_loop(db, root, platforms, account_ids=None):
     if root.parent_task_id:
         raise HTTPException(400, '请在总任务上启动或继续闭环')
     if root.status != 'completed':
         raise HTTPException(409, '先审批总任务报告，再继续执行闭环')
-    params = configure({**(root.input_params or {}), 'execution_loop':True, 'publish_platforms':platforms}, root.title)
+    from app.services.publishing_service import resolve_publish_accounts
+    values = {**(root.input_params or {}), 'execution_loop':True, 'publish_platforms':platforms}
+    if account_ids is not None: values['publish_account_ids'] = account_ids
+    params = resolve_publish_accounts(db, root.company_id, configure(values, root.title))
     # Targets cannot silently change after publication requests were created.
     task_ids = [root.id] + [t.id for t in children_for_root(db, root) if enabled(t)]
     related = db.query(VideoProject).filter(VideoProject.company_id==root.company_id, VideoProject.is_deleted==False, VideoProject.task_id.in_(task_ids)).all()
     if any(db.query(PublishJob).filter_by(company_id=root.company_id, video_project_id=p.id).first() for p in related):
-        if set(params['publish_platforms']) != set((root.input_params or {}).get('publish_platforms', [])):
+        if (set(params['publish_platforms']) != set((root.input_params or {}).get('publish_platforms', []))
+                or set(params.get('publish_account_ids', [])) != set((root.input_params or {}).get('publish_account_ids', []))):
             raise HTTPException(409, '已创建发布审批，不能改变目标平台；请另建执行任务')
     root.input_params=params
     db.flush()
@@ -234,6 +255,8 @@ def children_for_root(db,root):
 
 def snapshot(db,task):
     root=root_task(db,task)
+    from app.services.publishing_service import get_account, DISPLAY
+    accounts = [get_account(db, root.company_id, uuid.UUID(value)) for value in (root.input_params or {}).get('publish_account_ids', [])]
     tasks=[root]+[t for t in children_for_root(db,root) if enabled(t)]
     ids=[t.id for t in tasks]
     projects=db.query(VideoProject).filter(VideoProject.company_id==root.company_id,VideoProject.task_id.in_(ids),VideoProject.is_deleted==False).all()
@@ -246,6 +269,7 @@ def snapshot(db,task):
     stages += [{'kind':'publish','id':str(j.id),'title':j.title,'status':j.status,'error':j.error_message or (j.metrics or {}).get('feedback_error'),
                 'feedback_state':(j.metrics or {}).get('feedback_state'), 'feedback_due_at':(j.metrics or {}).get('feedback_due_at'),
                 'platform':(j.content_snapshot or {}).get('platform'),
+                'account_label':(j.content_snapshot or {}).get('account_label'), 'platform_connection_id':str(j.platform_connection_id),
                 'approval_id':next((str(a.id) for a in approvals if a.resource_id==str(j.id) and a.status=='pending'),None)} for j in jobs]
     feedback=[t for t in tasks if (t.input_params or {}).get('feedback_publish_job_id')]
     completed=bool(jobs) and all(j.status=='published' and (j.metrics or {}).get('feedback_task_id') and
@@ -261,5 +285,7 @@ def snapshot(db,task):
     elif projects and all(p.project_status=='completed' for p in projects) and not jobs:next_step='在总任务选择目标发布平台并继续执行'
     elif jobs and all(j.status=='published' for j in jobs):next_step='等待发布后定时数据回流与复盘，也可在发布页面手动刷新数据'
     return {'enabled':enabled(root),'root_id':str(root.id),'status':state,'stages':stages,
-            'publish_platforms':(root.input_params or {}).get('publish_platforms',[]),'next_step':next_step,
+            'publish_platforms':(root.input_params or {}).get('publish_platforms',[]),
+            'publish_account_ids':(root.input_params or {}).get('publish_account_ids',[]),'next_step':next_step,
+            'publish_accounts':[{'id':str(row.id),'label':DISPLAY[row.platform] + ' · ' + (row.label or row.account_name or '默认账号')} for row in accounts],
             'notice':'岗位任务完成表示该阶段交付完成；仅发布成功且复盘获批后，本轮闭环才完成。平台账号指标不等于单条作品效果。'}

@@ -4,7 +4,7 @@ from playwright.sync_api import sync_playwright
 from app.connectors import web_platform as web
 
 
-def test_browser_closed_before_submit():
+def test_browser_closed_before_submit(tmp_path):
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=['--no-sandbox'])
         page = browser.new_page()
@@ -18,7 +18,7 @@ def test_browser_closed_before_submit():
             raise AssertionError('Closed page was accepted')
         page = browser.new_page()
         page.route('**/*', lambda route: route.fulfill(content_type='text/html', body='<input type=file><input placeholder=标题><textarea></textarea>'))
-        media = Path('/tmp/campfire-publish-fix/test-only-closed.mp4')
+        media = tmp_path / 'test-only-closed.mp4'
         media.write_bytes(b'test-only')
         originals = {key: getattr(web, key) for key in ['_ensure_open', '_get_session', 'session_status', '_select_publish_location_impl', '_publish_button']}
         try:

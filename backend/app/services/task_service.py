@@ -43,6 +43,8 @@ class TaskService:
                 raise HTTPException(status_code=400, detail="只能引用已经审批完成的任务")
         from app.services.execution_loop import configure
         params = configure(data.input_params, (data.input_params or {}).get('goal') or data.title)
+        from app.services.publishing_service import resolve_publish_accounts
+        params = resolve_publish_accounts(self.db, company_id, params)
         for key in ('schedule', 'schedule_template_id', 'scheduled_for'):
             params.pop(key, None)
         if data.schedule:

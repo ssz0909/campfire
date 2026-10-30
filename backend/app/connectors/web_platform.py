@@ -99,21 +99,41 @@ def _saved_state_has_auth(saved, platform):
     return False
 
 def browser_operation(function):
-    """Playwright's sync objects must stay on their owning thread."""
+    """Own Playwright on one thread and isolate each account's browser profile."""
     @wraps(function)
     def wrapper(*args, **kwargs):
+        supplied = 'profile_id' in kwargs
+        profile_id = kwargs.pop('profile_id', None)
+        def invoke():
+            previous = getattr(_worker_state, 'profile_id', None)
+            if supplied:
+                _worker_state.profile_id = str(uuid.UUID(str(profile_id))) if profile_id else None
+            try:
+                return function(*args, **kwargs)
+            finally:
+                _worker_state.profile_id = previous
         if getattr(_worker_state, "active", False):
-            return function(*args, **kwargs)
+            return invoke()
         def run():
             _worker_state.active = True
-            return function(*args, **kwargs)
+            _worker_state.profile_id = None
+            return invoke()
         return _browser_worker.submit(run).result()
     return wrapper
+
+
+def _session_key(company_id, platform):
+    profile = getattr(_worker_state, 'profile_id', None)
+    return f"{company_id}:{platform}" + (f":{profile}" if profile else '')
 
 def _profile_dir(company_id, platform):
     if platform not in PLATFORM_URLS:
         raise ValueError('unsupported platform')
     root = Path(settings.LOCAL_STORAGE_PATH) / "platform-sessions" / str(company_id) / platform
+    profile = getattr(_worker_state, 'profile_id', None)
+    if profile:
+        # Sibling directory: logging out the legacy profile must not delete new accounts.
+        root = root.parent / (platform + '-accounts') / str(uuid.UUID(str(profile)))
     root.mkdir(parents=True, exist_ok=True)
     return root
 
@@ -150,9 +170,36 @@ def _remove_stale_singleton_links(profile_dir):
     return True
 
 def _get_session(company_id, platform):
-    key = f"{company_id}:{platform}"
+    key = _session_key(company_id, platform)
     with _lock:
         return _profiles.get(key)
+
+def _account_fingerprint(context, page, platform):
+    """Return a non-secret stable identity hash when the platform exposes one."""
+    import hashlib
+    try:
+        if platform == 'wechat_channels':
+            value = page.evaluate("() => localStorage.getItem('finder_username') || ''")
+        else:
+            value = next((c['value'] for c in context.cookies() if c['name'] == 'uid_tt' and c.get('value')), '')
+        return 'websha256:' + hashlib.sha256((platform + ':' + value).encode()).hexdigest() if value else None
+    except Exception:
+        return None
+
+
+def _release_idle_accounts(company_id, platform):
+    # Keep at most two contexts open; encrypted sessions remain on disk.
+    target = _session_key(company_id, platform)
+    for key in list(_profiles):
+        if len(_profiles) < 2: break
+        if key == target: continue
+        session = _profiles.get(key)
+        if session and session.get('authenticated') and session.get('session_saved'):
+            parts = key.split(':')
+            close_session(parts[0], parts[1], profile_id=parts[2] if len(parts) == 3 else None)
+    if len(_profiles) >= 2:
+        raise RuntimeError('已有两个登录窗口，请先完成登录并保存会话，再打开其他账号')
+
 
 def _watch_browser_session(context, page, platform, session):
     """Log lifecycle only; never log provider account content or session data."""
@@ -215,6 +262,7 @@ def start_session(company_id, platform, geolocation=None):
                     "message": "登录窗口已存在，请在浏览器中完成登录"}
         except Exception:
             close_session(company_id, platform)
+    _release_idle_accounts(company_id, platform)
     pw = None
     context = None
     try:
@@ -237,14 +285,14 @@ def start_session(company_id, platform, geolocation=None):
         page = context.pages[0] if context.pages else context.new_page()
         session = {"pw": pw, "context": context, "page": page}
         _watch_browser_session(context, page, platform, session)
-        with _lock: _profiles[f"{company_id}:{platform}"] = session
+        with _lock: _profiles[_session_key(company_id, platform)] = session
         return _navigate_login(_get_session(company_id, platform), platform)
     except Exception as exc:
         logger.exception("Could not start %s browser session for company %s", platform, company_id)
         if context:
             try: context.close()
             except Exception: pass
-        with _lock: _profiles.pop(f"{company_id}:{platform}", None)
+        with _lock: _profiles.pop(_session_key(company_id, platform), None)
         message = str(exc).lower()
         if isinstance(exc, ImportError) or "executable doesn't exist" in message or "browser" in message and "install" in message:
             detail = "浏览器运行时未安装，请安装 Chromium 后重试"
@@ -311,6 +359,7 @@ def session_status(company_id, platform):
             _saved_path(company_id, platform).unlink(missing_ok=True)
         return {"status": "authorized" if authorized else "login_required", "login_required": not authorized, "url": page.url,
                 'session_saved': bool(authorized and session.get('session_saved')), 'browser_open': True,
+                'account_fingerprint': _account_fingerprint(session['context'], page, platform) if authorized else None,
                 'message': ('平台网页登录成功，登录会话已保存' if session.get('session_saved') else '平台网页登录成功，但会话保存失败，请暂勿关闭窗口') if authorized else ('平台页面加载失败，请检查本机网络或代理，恢复后刷新已打开的窗口' if session.get('navigation_error') else '请在平台窗口完成扫码登录')}
     except Exception as exc:
         # A slow provider page is still an open login session. Do not downgrade
@@ -319,12 +368,14 @@ def session_status(company_id, platform):
                 "message": f"平台页面仍在加载，请稍后重试：{type(exc).__name__}"}
 
 @browser_operation
-def publish(company_id, platform, title, description, media_url, location_name=None, geolocation=None):
+def publish(company_id, platform, title, description, media_url, location_name=None, geolocation=None, expected_account_id=None):
     _ensure_open(company_id, platform)
     session = _get_session(company_id, platform)
     if not session: return {"status": "login_required", "message": "请先打开平台 Web 登录窗口并完成扫码登录"}
     page = session["page"]
     state = session_status(company_id, platform)
+    if expected_account_id and state.get('account_fingerprint') != expected_account_id:
+        return {'status':'login_required', 'message':'登录账号与已绑定账号不一致或身份无法确认，请退出并重新登录原账号'}
     if state["login_required"]: return state | {"message": "请在打开的浏览器窗口完成扫码登录"}
     stage = '打开上传页'
     submit_attempted = False
@@ -1003,11 +1054,13 @@ def _fill_channels_copy(page, title, description):
     body_box.fill(title + ('\n' + description if description else ''), timeout=15000)
 
 @browser_operation
-def read_metrics(company_id, platform):
+def read_metrics(company_id, platform, expected_account_id=None):
     _ensure_open(company_id, platform)
     session = _get_session(company_id, platform)
     if not session: return {"status": "login_required", "metrics": {}}
     state = session_status(company_id, platform)
+    if expected_account_id and state.get('account_fingerprint') != expected_account_id:
+        return {'status':'login_required', 'metrics':{}, 'message':'登录身份与已绑定账号不一致，未读取其他账号数据'}
     if state["login_required"]: return {"status": "login_required", "metrics": {}}
     page = session['page']
     try:
@@ -1044,7 +1097,7 @@ def parse_visible_metrics(body):
 @browser_operation
 def close_session(company_id, platform, *, logout=False):
     if platform not in PLATFORM_URLS: raise ValueError('unsupported platform')
-    key = f"{company_id}:{platform}"
+    key = _session_key(company_id, platform)
     with _lock: session = _profiles.pop(key, None)
     if session:
         if logout:
@@ -1074,8 +1127,9 @@ def _ensure_open(company_id, platform):
 def shutdown_sessions():
     global _playwright
     for key in list(_profiles):
-        company_id, platform = key.rsplit(':', 1)
-        close_session(company_id, platform)
+        parts = key.split(':')
+        company_id, platform = parts[:2]
+        close_session(company_id, platform, profile_id=parts[2] if len(parts) == 3 else None)
     if _playwright is not None:
         _playwright.stop()
         _playwright = None

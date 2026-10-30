@@ -29,7 +29,12 @@ def _with_output_preview(project, db):
     data['publish_title'], data['publish_description'] = copy['title'], copy['description']
     source = db.query(OperationTask).filter_by(id=project.task_id, company_id=project.company_id).first() if project.task_id else None
     if source:
-        data['publish_platforms'] = (root_task(db, source).input_params or {}).get('publish_platforms', [])
+        params = root_task(db, source).input_params or {}
+        data['publish_platforms'] = params.get('publish_platforms', [])
+        from app.services.publishing_service import get_account, DISPLAY
+        data['publish_accounts'] = [
+            {'id':str(row.id), 'platform':row.platform, 'label':DISPLAY[row.platform] + ' · ' + (row.label or row.account_name or '默认账号')}
+            for row in [get_account(db, project.company_id, uuid.UUID(value)) for value in params.get('publish_account_ids', [])]]
     if project.output_asset_id:
         from app.models.asset import Asset
         from app.schemas.asset import AssetResponse

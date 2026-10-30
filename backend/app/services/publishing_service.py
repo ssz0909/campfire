@@ -18,9 +18,50 @@ def _config(platform):
         return settings.DOUYIN_CLIENT_ID, settings.DOUYIN_CLIENT_SECRET, settings.DOUYIN_REDIRECT_URI
     return settings.WECHAT_CHANNELS_CLIENT_ID, settings.WECHAT_CHANNELS_CLIENT_SECRET, settings.WECHAT_CHANNELS_REDIRECT_URI
 
-def get_connection(db, company_id, platform):
+def get_connection(db, company_id, platform, connection_id=None):
     if platform not in SUPPORTED: raise HTTPException(400, "不支持的发布平台")
-    return db.query(PlatformConnection).filter_by(company_id=company_id, platform=platform).first()
+    query = db.query(PlatformConnection).filter_by(company_id=company_id, platform=platform)
+    if connection_id:
+        row = query.filter_by(id=connection_id).first()
+        if not row: raise HTTPException(404, '发布账号不存在或不属于本企业')
+        return row
+    rows = query.order_by(PlatformConnection.created_at, PlatformConnection.id).all()
+    if len(rows) > 1:
+        raise HTTPException(409, '该平台有多个账号，请明确选择发布账号')
+    return rows[0] if rows else None
+
+
+def session_options(row):
+    return {'profile_id': row.session_profile} if row and row.session_profile else {}
+
+
+def identity_options(row):
+    return {'expected_account_id':row.account_id} if row.account_id and row.account_id.startswith('websha256:') else {}
+
+
+def get_account(db, company_id, account_id):
+    row = db.query(PlatformConnection).filter_by(id=account_id, company_id=company_id).first()
+    if not row: raise HTTPException(404, '发布账号不存在或不属于本企业')
+    return row
+
+
+def resolve_publish_accounts(db, company_id, params):
+    """Freeze account IDs at task creation. Never guess among same-platform accounts."""
+    params = dict(params or {})
+    selected = params.get('publish_account_ids')
+    if selected is not None:
+        if not isinstance(selected, list) or len(selected) > 40:
+            raise HTTPException(422, '发布账号必须为账号 ID 列表，最多40个')
+        try: ids = list(dict.fromkeys(uuid.UUID(str(value)) for value in selected))
+        except (ValueError, TypeError, AttributeError): raise HTTPException(422, '发布账号 ID 无效')
+        rows = [get_account(db, company_id, value) for value in ids]
+        params['publish_account_ids'] = [str(row.id) for row in rows]
+        params['publish_platforms'] = list(dict.fromkeys(row.platform for row in rows))
+    else:
+        rows = [get_connection(db, company_id, platform) for platform in params.get('publish_platforms', [])]
+        if rows and all(rows):
+            params['publish_account_ids'] = [str(row.id) for row in rows]
+    return params
 
 def authorization_url(db, company_id, platform):
     client_id, _, redirect = _config(platform)
@@ -71,7 +112,7 @@ def complete_authorization(db, company_id, platform, code, state, account_id=Non
     return row
 
 def create_publish(db, company_id, user_id, platform, data):
-    row = get_connection(db, company_id, platform)
+    row = get_connection(db, company_id, platform, data.platform_connection_id)
     if not row or row.status not in ('authorized', 'session_saved'): raise HTTPException(400, "请先授权登录发布平台")
     if not data.task_id and not data.video_project_id and not data.asset_ids: raise HTTPException(400, "发布必须关联已审批的任务、视频项目或素材")
     if data.task_id:
@@ -85,9 +126,13 @@ def create_publish(db, company_id, user_id, platform, data):
         assets = db.query(Asset).filter(Asset.id.in_(data.asset_ids), Asset.company_id == company_id, Asset.is_deleted == False, Asset.is_available == True, Asset.processing_status == "ready").all()
         if len(assets) != len(set(data.asset_ids)): raise HTTPException(400, "只能发布本企业已处理完成的素材")
     existing = db.query(PublishJob).filter_by(company_id=company_id, request_key=data.request_key).first()
-    if existing: return existing
+    if existing:
+        if existing.platform_connection_id != row.id:
+            raise HTTPException(409, '此请求标识已用于另一个发布账号，请创建独立发布请求')
+        return existing
     snapshot = {"title": data.title, "description": data.description, "media_type": data.media_type, "asset_ids": [str(x) for x in data.asset_ids]}
     from app.services.execution_loop import publication_location
+    snapshot.update(platform=platform, account_label=row.label or row.account_name or DISPLAY[platform], platform_connection_id=str(row.id))
     snapshot['location_name'] = data.location_name or publication_location(db, company_id)
     if data.task_id:
         task = db.query(OperationTask).filter_by(id=data.task_id, company_id=company_id).first()
@@ -158,16 +203,16 @@ def update_metrics(db, company_id, job_id, metrics):
     db.commit(); db.refresh(job); return job
 
 
-def start_web(db, company_id, platform):
+def start_web(db, company_id, platform, connection_id=None):
     from app.connectors.web_platform import start_session
-    row = get_connection(db, company_id, platform)
+    row = get_connection(db, company_id, platform, connection_id)
     if not row:
         row = PlatformConnection(company_id=company_id, platform=platform, status="authorizing")
         db.add(row); db.commit()
     try:
         from app.services.execution_loop import publication_geolocation
         geolocation = publication_geolocation(db, company_id)
-        result = start_session(company_id, platform, geolocation=geolocation) if geolocation else start_session(company_id, platform)
+        result = start_session(company_id, platform, **session_options(row), **({'geolocation': geolocation} if geolocation else {}))
     except RuntimeError as exc:
         row.last_error = str(exc)
         db.commit()
@@ -177,11 +222,18 @@ def start_web(db, company_id, platform):
     db.commit()
     return result
 
-def web_status(db, company_id, platform):
+def web_status(db, company_id, platform, connection_id=None):
     from app.connectors.web_platform import session_status
-    row = get_connection(db, company_id, platform)
-    result = session_status(company_id, platform)
+    row = get_connection(db, company_id, platform, connection_id)
+    result = session_status(company_id, platform, **session_options(row))
     if row:
+        fingerprint = result.get('account_fingerprint')
+        if result.get('status') == 'authorized' and fingerprint:
+            if row.account_id and row.account_id.startswith('websha256:') and row.account_id != fingerprint:
+                result = {**result, 'status':'login_required', 'message':'当前登录账号与已绑定账号不一致，请退出并重新登录原账号'}
+                row.last_error = result['message']
+            else:
+                row.account_id = fingerprint
         row.status = {"authorized": "authorized", "session_saved": "session_saved", "login_required": "authorizing"}.get(result.get("status"), "disconnected")
         if row.status == "authorized":
             row.authorized_at = row.authorized_at or datetime.now(timezone.utc)
@@ -243,9 +295,9 @@ def web_publish(db, company_id, job_id):
         from app.services.execution_loop import publication_geolocation
         geolocation = publication_geolocation(db, company_id)
         if location or geolocation:
-            result = publish(company_id, row.platform, job.title, job.description or "", job.media_url or "", location_name=location, **({'geolocation':geolocation} if geolocation else {}))
+            result = publish(company_id, row.platform, job.title, job.description or "", job.media_url or "", **session_options(row), **identity_options(row), location_name=location, **({'geolocation':geolocation} if geolocation else {}))
         else:
-            result = publish(company_id, row.platform, job.title, job.description or "", job.media_url or "")
+            result = publish(company_id, row.platform, job.title, job.description or "", job.media_url or "", **session_options(row), **identity_options(row))
     except Exception:
         result = {'status':'manual_required','message':'平台执行结果不确定，请核对发布后台后再操作，避免重复发布'}
     job.status = result["status"]; job.provider_url = result.get("provider_url"); job.provider_post_id = result.get("provider_post_id"); job.metrics = result.get("metrics"); job.error_message = result.get("message")
@@ -254,12 +306,12 @@ def web_publish(db, company_id, job_id):
         job.metrics = {**(job.metrics or {}), 'feedback_due_at': (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat(), 'feedback_attempts': 0}
     db.commit(); db.refresh(job); return job
 
-def close_web(db, company_id, platform):
+def close_web(db, company_id, platform, connection_id=None):
     from app.connectors.web_platform import close_session
-    result = close_session(company_id, platform, logout=True)
-    row = get_connection(db, company_id, platform)
+    row = get_connection(db, company_id, platform, connection_id)
+    result = close_session(company_id, platform, logout=True, **session_options(row))
     if row:
-        row.status = "disconnected"; row.account_id = None; row.account_name = None; db.commit()
+        row.status = "disconnected"; db.commit()
     return result
 
 def web_metrics(db, company_id, job_id):
@@ -276,13 +328,13 @@ def web_metrics(db, company_id, job_id):
     row = db.query(PlatformConnection).filter_by(id=job.platform_connection_id, company_id=company_id).first()
     if not row: raise HTTPException(400, '平台连接不存在')
     from app.connectors.web_platform import read_metrics
-    result = read_metrics(company_id, row.platform)
+    result = read_metrics(company_id, row.platform, **session_options(row), **identity_options(row))
     feedback_task = None
     if result.get('metrics'):
         numeric = {k:v for k,v in result['metrics'].items() if isinstance(v, (int,float)) and not isinstance(v,bool)}
         previous = {k:v for k,v in (job.metrics or {}).items() if k in numeric}
         job.metrics = {**(job.metrics or {}), **result['metrics'], 'source':'web',
-            'scope':'account', 'updated_at':datetime.now(timezone.utc).isoformat()}
+            'scope':'account', 'platform_connection_id':str(row.id), 'account_label':row.label or row.account_name, 'updated_at':datetime.now(timezone.utc).isoformat()}
         if numeric and (not is_loop and numeric != previous or is_loop and not job.metrics.get('feedback_task_id')):
             from app.models.digital_employee import DigitalEmployee
             analyst = db.query(DigitalEmployee).filter_by(company_id=company_id, role_title='data_analyst',
