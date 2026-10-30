@@ -61,6 +61,19 @@
           <p v-if="locationMessage" role="status" class="save-msg">{{ locationMessage }}</p>
         </AppCard>
       </n-tab-pane>
+      <n-tab-pane name="video-music" tab="默认视频配乐">
+        <AppCard>
+          <p class="tab-desc">数字员工后续创建的视频自动配乐，合成后审核、发布，无需逐条替换。已创建的视频保留原设置；固定音乐模式清空音乐并保存可关闭默认配乐。</p>
+          <n-form-item label="配乐方式"><n-select v-model:value="defaultMusicMode" :options="[{label:'固定一首音乐',value:'fixed'},{label:'从素材库随机选取',value:'random'}]" /></n-form-item>
+          <MusicPicker v-if="auth.currentCompanyId && defaultMusicMode==='fixed'" :company-id="auth.currentCompanyId" v-model:music-asset-id="defaultMusicId" v-model:music-volume="defaultMusicVolume" />
+          <template v-if="defaultMusicMode==='random'">
+            <p class="tab-desc">每条新视频从本企业已处理完成的音频中随机选择一首；选定后重试不会换曲。请先在素材库上传音乐，无可用音频时会提示补充。</p>
+            <n-form-item :label="'音乐音量 '+Math.round(defaultMusicVolume*100)+'%'"><n-slider :value="Math.round(defaultMusicVolume*100)" :min="0" :max="100" @update:value="defaultMusicVolume=$event/100" /></n-form-item>
+          </template>
+          <n-button type="primary" :loading="savingDefaultMusic" @click="saveDefaultMusic">保存默认视频配乐</n-button>
+          <p v-if="defaultMusicMessage" role="status" class="save-msg">{{ defaultMusicMessage }}</p>
+        </AppCard>
+      </n-tab-pane>
       <!-- Brand Profile -->
       <n-tab-pane name="brand" :tab="t('Brand Profile')">
         <AppCard>
@@ -149,7 +162,7 @@ const { t } = useI18n()
 import { ref, reactive, computed, onMounted, h } from 'vue'
 import {
   NForm, NFormItem, NInput, NSelect, NButton, NTabs, NTabPane,
-  NDivider, NDataTable, NCheckbox, type FormInst, type FormRules, type DataTableColumns,
+  NDivider, NDataTable, NCheckbox, NSlider, type FormInst, type FormRules, type DataTableColumns,
 } from 'naive-ui'
 import { CubeOutline } from '@vicons/ionicons5'
 import AppPageHeader from '@/components/common/AppPageHeader.vue'
@@ -161,6 +174,7 @@ import { useCompanyStore } from '@/stores/company'
 import { useAuthStore } from '@/stores/auth'
 import { companiesApi } from '@/api/companies'
 import type { CompanyProduct } from '@/types/company'
+import MusicPicker from '@/components/video/MusicPicker.vue'
 
 const companyStore = useCompanyStore()
 const auth = useAuthStore()
@@ -180,6 +194,20 @@ async function savePublishLocation(){
     locationMessage.value='已保存到当前企业；下次打开平台窗口或提交发布时生效。';
   }catch(e:any){locationMessage.value=e.response?.data?.detail ? (typeof e.response.data.detail==='string'?e.response.data.detail:'位置配置格式无效，请检查经纬度') : e.message||'保存失败';}
   finally{savingLocation.value=false}
+}
+
+const defaultMusicId=ref<string|null>(null),defaultMusicVolume=ref(0.25),savingDefaultMusic=ref(false),defaultMusicMessage=ref('')
+const defaultMusicMode=ref<'fixed'|'random'>('fixed')
+async function saveDefaultMusic() {
+  if(!auth.currentCompanyId)return
+  savingDefaultMusic.value=true;defaultMusicMessage.value=''
+  try {
+    if(!Number.isFinite(defaultMusicVolume.value)||defaultMusicVolume.value<0||defaultMusicVolume.value>1)throw new Error('音量需在0至1之间')
+    await companiesApi.setDefaultVideoMusic(auth.currentCompanyId,{music_asset_id:defaultMusicMode.value==='random'?null:defaultMusicId.value,music_volume:defaultMusicVolume.value,selection_mode:defaultMusicMode.value})
+    await companyStore.fetchCompany()
+    defaultMusicMessage.value=defaultMusicMode.value==='random'?'已保存，后续数字员工视频将随机选取素材库中的音乐。':defaultMusicId.value?'已保存，后续数字员工自动制作的视频将使用此配乐。':'已关闭默认配乐。'
+  } catch(e:any){defaultMusicMessage.value=e.response?.data?.detail||e.message||'保存失败，请重试'}
+  finally {savingDefaultMusic.value=false}
 }
 
 const activeTab = ref('company')
@@ -243,6 +271,10 @@ onMounted(async () => {
     companyForm.website = companyStore.currentCompany.website ?? ''
     companyForm.description = companyStore.currentCompany.description ?? ''
     const goals=companyStore.currentCompany.business_goals??{};
+    const music=(goals.default_video_music??{}) as {music_asset_id?:string|null;music_volume?:number;selection_mode?:'fixed'|'random'};
+    defaultMusicId.value=music.music_asset_id||null;
+    defaultMusicVolume.value=music.music_volume??0.25;
+    defaultMusicMode.value=music.selection_mode??'fixed';
     const input=(goals.publish_location_input??{}) as Record<string,unknown>;
     publishLocation.location_name=String(input.location_name??goals.publish_location_name??'');
     publishLocation.map_url=String(input.map_url??'');

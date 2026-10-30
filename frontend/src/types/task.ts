@@ -1,4 +1,14 @@
-export type TaskStatus = 'pending' | 'queued' | 'running' | 'waiting_approval' | 'waiting_external' | 'waiting_retry' | 'partial' | 'completed' | 'failed' | 'cancelled'
+export type TaskStatus = 'scheduled' | 'paused' | 'pending' | 'queued' | 'running' | 'waiting_approval' | 'waiting_external' | 'waiting_retry' | 'partial' | 'completed' | 'failed' | 'cancelled'
+export interface TaskSchedule {
+  frequency: 'daily' | 'weekly'
+  time: string
+  timezone: string
+  weekdays: number[]
+  enabled?: boolean
+  next_run_at?: string
+  last_run_at?: string
+  last_error?: string
+}
 export type TaskType = 'business_analysis' | 'marketing_planning' | 'video_generation' | 'asset_analysis' | 'daily_report' | 'custom'
 export interface TaskLogEntry {
   id?: string
@@ -46,6 +56,7 @@ export interface OperationTask {
   updated_at: string
 }
 export interface CreateTaskRequest {
+  schedule?: TaskSchedule
   parent_task_id?: string
   digital_employee_id: string
   title: string
@@ -53,6 +64,7 @@ export interface CreateTaskRequest {
   input_params: Record<string, unknown>
 }
 export const taskLabels: Record<string, string> = {
+  scheduled: '定时执行中', paused: '计划已暂停',
   pending: '待执行', queued: '排队中', running: '执行中', waiting_approval: '待审批',
   waiting_external: '等待外部处理', waiting_retry: '等待重试', partial: '部分完成',
   completed: '已完成', failed: '失败或被退回', cancelled: '已取消',

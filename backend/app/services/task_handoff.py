@@ -63,16 +63,21 @@ def create_video_handoff(db, task):
         duration = target_duration((task.output or {}).get('video_brief') or task.input_params, goal)
         descriptors = [{'id':str(a.id),'name':a.name, 'description':((a.asset_metadata or {}).get('vision_analysis') or {}).get('visual_description') or a.source_description} for a in selected]
         raw_plan = (task.output or {}).get('video_storyboard')
+        if not raw_plan and (task.output or {}).get('mode') == 'llm':
+            from fastapi import HTTPException
+            raise HTTPException(422,'该旧版脚本缺少结构化分镜，请重新规划并审批；不会循环素材补足时长')
         try:
             plan = validate_plan(raw_plan, descriptors, duration) if raw_plan else fallback_plan(descriptors, duration)
         except ValueError as exc:
             from fastapi import HTTPException
             raise HTTPException(422,str(exc)) from exc
+        from app.services.video_music import resolve_music_settings
+        music=resolve_music_settings(db,task.company_id,task.input_params)
         project = VideoProject(company_id=task.company_id, created_by=task.created_by,
             digital_employee_id=task.digital_employee_id, task_id=task.id, title=task.title,
             creation_mode='prompt_to_video', marketing_goal=(task.input_params or {}).get('goal'),
             script=(task.output or {}).get('video_script') or (task.output or {}).get('report_markdown'), aspect_ratio='9:16',
-            target_duration_seconds=duration, storyboard=plan, project_status='draft')
+            target_duration_seconds=duration, storyboard=plan, project_status='draft',**music)
         from app.models.company import Company
         company = db.query(Company).filter_by(id=task.company_id).first()
         project.product_name = company.name if company else None

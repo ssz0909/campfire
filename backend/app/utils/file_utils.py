@@ -89,6 +89,7 @@ def validate_file_type(
 def _normalise_mime(mime: str) -> str:
     """Normalise common MIME aliases."""
     aliases: dict[str, str] = {
+        'audio/x-wav': 'audio/wav',
         "image/jpg": "image/jpeg",
         "video/mpeg": "video/mp4",
     }

@@ -38,6 +38,11 @@ export interface Shot {
   camera_movement?: string
   source_asset_id?: string
   generation_prompt?: string
+  opening_frame?: string
+  closing_frame?: string
+  transition_out?: 'cut' | 'match_cut' | 'dissolve' | 'fade'
+  transition_duration_seconds?: number
+  transition_notes?: string
   duration_seconds: number
   status: ShotStatus
   asset_url?: string
@@ -48,6 +53,8 @@ export interface Shot {
 }
 
 export interface VideoProject {
+  music_asset_id?: string|null
+  music_volume?: number
   id: string
   company_id: string
   title: string

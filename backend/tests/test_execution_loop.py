@@ -150,7 +150,8 @@ def test_execution_endpoint_tenant_scope(client,db):
 def test_full_chain_from_manager_through_feedback_approval(client,db,monkeypatch):
     user,company,_=setup(db)
     from tests.test_asset_intelligence import make_asset
-    make_asset(db,company,user,'酒店环境','landscape',[],'酒店真实山景')
+    for image_index in range(12):
+        make_asset(db,company,user,f'酒店环境{image_index}','landscape',[],'酒店真实山景')
     monkeypatch.setattr('app.services.video_generation.reference_url',lambda *a,**k:'https://test.invalid/reference')
     headers=auth_headers(user);base=f'/api/v1/companies/{company.id}'
     monkeypatch.setattr(settings,'TASK_EXECUTION_MODE','inline')

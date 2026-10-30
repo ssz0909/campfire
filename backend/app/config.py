@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     LLM_API_KEY: str = ""
     LLM_BASE_URL: str = ""
     LLM_MODEL: str = ""
+    LLM_TIMEOUT_SECONDS: float = 300
 
     # Social publishing. Credentials are supplied by the platform operator after
     # registering approved applications with each provider.
@@ -92,6 +93,7 @@ class Settings(BaseSettings):
     MAX_UPLOAD_SIZE_MB: int = 100
     ALLOWED_IMAGE_TYPES: str = "image/jpeg,image/png,image/gif,image/webp,image/svg+xml"
     ALLOWED_VIDEO_TYPES: str = "video/mp4,video/quicktime,video/x-msvideo,video/webm"
+    ALLOWED_AUDIO_TYPES: str = "audio/mpeg,audio/wav,audio/x-wav"
     ALLOWED_DOC_TYPES: str = (
         "application/pdf,"
         "application/msword,"
@@ -124,6 +126,7 @@ class Settings(BaseSettings):
         return (
             self.get_allowed_image_types()
             + self.get_allowed_video_types()
+            + [t.strip() for t in self.ALLOWED_AUDIO_TYPES.split(',') if t.strip()]
             + self.get_allowed_doc_types()
         )
 

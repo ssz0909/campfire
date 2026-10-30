@@ -6,7 +6,7 @@ company-scoped browser profile and publishing stops when the page layout or
 login state is not recognised.
 """
 from __future__ import annotations
-import asyncio, errno, logging, os, re, socket, threading, uuid
+import asyncio, errno, json, logging, os, re, socket, threading, uuid
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -344,33 +344,45 @@ def publish(company_id, platform, title, description, media_url, location_name=N
             stage = '填写发布文案'
             _fill_douyin_copy(page, title, description)
         else:
-            page.goto("https://channels.weixin.qq.com/platform/post/create", wait_until="domcontentloaded", timeout=30000)
+            stage = '打开视频号发表入口'
+            file_input = _open_channels_upload(page)
             if not media_url or not Path(media_url).exists():
                 return {"status": "manual_required", "message": "Web 发布需要本机媒体文件路径，当前仅创建发布草稿"}
-            stage = '选择并上传视频文件'
-            page.locator('input[type="file"]').first.set_input_files(media_url, timeout=30000)
-            stage = '等待上传后的编辑器'
-            _wait_video_editor(page)
+            stage = '上传视频并等待视频号转码完成'
+            _upload_channels_video(page, file_input, media_url)
             stage = '填写发布文案'
             _fill_channels_copy(page, title, description)
         if location_name:
             stage = '选择地理位置'
-            _select_publish_location(page, location_name)
+            if platform == 'wechat_channels':
+                _select_channels_publish_location(page, location_name)
+            else:
+                _select_publish_location(page, location_name)
         stage = '等待发布按钮可用'
+        if platform == 'wechat_channels':
+            _check_channels_validation(page)
         button = _publish_button(page, platform)
         button.wait_for(state='visible', timeout=30000)
         # Mark uncertain before clicking: even a click timeout can mean the
         # platform received it. Never automatically retry that operation.
         stage = '提交发布'
         submit_attempted = True
-        button.click(timeout=60000)
-        stage = '核对平台发布结果'
+        receipt = {}
         try:
-            page.get_by_text(re.compile(r'^(发布成功|发表成功|提交成功)[！!。]?$')).first.wait_for(timeout=30000)
-        except Exception:
+            if platform == 'wechat_channels':
+                receipt = _submit_channels_video(page, button, title, description)
+            else:
+                button.click(timeout=60000)
+                _wait_douyin_publish_result(page)
+        except Exception as exc:
+            detail = ('视频号页面提示：' + '；'.join(_channels_validation_messages(page)) + '。'
+                      if platform == 'wechat_channels' and isinstance(exc, ValueError)
+                      and _channels_validation_messages(page) else '')
             return {'status':'manual_required', 'metrics':{'publish_stage':stage, 'submission_uncertain':True},
-                    'message':'已尝试点击发布，但未取得平台成功凭据；请在云端画面的作品管理中核对审核中、已发布及草稿，核对前勿重复提交。'}
-        return {"status": "published", "provider_post_id": None, "metrics": {"source": "web_pending_sync", 'publish_stage':'平台确认成功'}}
+                    'message':detail + '已尝试点击发布，但未取得平台成功凭据；请在云端画面的作品管理中核对审核中、已发布及草稿，核对前勿重复提交。'}
+        return {"status": "published", "provider_post_id": receipt.get('provider_post_id'),
+                "metrics": {"source": receipt.get('source', 'web_pending_sync'), 'publish_stage':'平台确认成功',
+                            'submission_uncertain': False}}
     except Exception as exc:
         logger.warning('Platform publish failed: platform=%s stage=%s error=%s submit_attempted=%s',
                        platform, stage, type(exc).__name__, submit_attempted)
@@ -380,6 +392,187 @@ def publish(company_id, platform, title, description, media_url, location_name=N
                 "message": f"发布停在「{stage}」：{reason}。" +
                     ('提交结果不确定，请先在云端作品管理核对，勿重复提交。' if submit_attempted else
                      '尚未进入提交发布步骤，请打开对应平台的云端画面检查上传、文案、封面及平台提示。')}
+
+def _wait_douyin_publish_result(page):
+    page.get_by_text(re.compile(r'^(发布成功|提交成功)[！!。]?$')).filter(visible=True).first.wait_for(timeout=30000)
+
+
+def _submit_channels_video(page, button, title, description):
+    """Capture the actual create response before clicking; toasts are transient.
+
+    Only the observed video create endpoint counts, never upload/clip, preview,
+    draft-save responses or a navigation. A matching new published list item
+    supplies a second source of evidence and the provider's object identifier.
+    """
+    state = {'receipt': None, 'rejected': False}
+    started_at = time.time()
+    expected = (title + ('\n' + description if description else '')).strip()
+
+    def observe(response):
+        parsed = urlparse(response.url)
+        prefix = '/micro/content/cgi-bin/mmfinderassistant-bin/post/'
+        if parsed.hostname != 'channels.weixin.qq.com' or parsed.path not in (
+                prefix + 'post_create', prefix + 'post_list'):
+            return
+        try:
+            payload = response.json()
+        except Exception:
+            return
+        if not isinstance(payload, dict):
+            return
+        if parsed.path == prefix + 'post_create':
+            if response.request.method != 'POST':
+                return
+            if response.status >= 400 or payload.get('errCode') != 0:
+                state['rejected'] = True
+                return
+            data = payload.get('data') or {}
+            identifier = data.get('objectId') if isinstance(data, dict) else None
+            state['receipt'] = {'source': 'web_create_response_verified', 'provider_post_id': str(identifier) if identifier else None}
+        elif payload.get('errCode') == 0:
+            items = (payload.get('data') or {}).get('list', [])
+            matches = []
+            for item in items:
+                try:
+                    recent = started_at - 10 <= float(item.get('createTime', 0)) <= time.time() + 60
+                except (TypeError, ValueError):
+                    continue
+                if (recent and item.get('status') == 1 and item.get('objectId')
+                        and (item.get('desc') or {}).get('description', '').strip() == expected):
+                    matches.append(item)
+            if len(matches) == 1:
+                state['receipt'] = {'source': 'web_post_list_verified', 'provider_post_id': str(matches[0]['objectId'])}
+
+    page.on('response', observe)
+    try:
+        button.click(timeout=60000)
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            if state['receipt']:
+                return state['receipt']
+            if state['rejected']:
+                raise ValueError('视频号发表接口返回失败，请检查平台提示')
+            _check_channels_validation(page)
+            success = page.get_by_text(re.compile(r'^(发表成功|发布成功)[！!。]?$')).filter(visible=True)
+            if success.count():
+                return {'source': 'web_success_notice_verified'}
+            page.wait_for_timeout(250)
+        raise ValueError('视频号未返回发表成功凭据')
+    finally:
+        page.remove_listener('response', observe)
+
+
+def _channels_validation_messages(page):
+    # Read only recognized validation messages, not account or draft contents.
+    errors = page.get_by_text(re.compile(
+        r'^(短标题包含特殊字符|标题超过16字限制|短标题.{0,12}(不能为空|不符合)|'
+        r'请上传视频|视频上传失败|视频描述不能为空|请填写视频描述)')).filter(visible=True)
+    return list(dict.fromkeys(errors.nth(i).inner_text(timeout=1000) for i in range(errors.count())))
+
+
+def _check_channels_validation(page):
+    errors = _channels_validation_messages(page)
+    if errors:
+        raise ValueError('视频号表单校验未通过：' + '；'.join(errors))
+
+
+def _wait_channels_publish_result(page):
+    # Channels has its own wording and validation UI. Never treat an editor
+    # disappearing or a navigation alone as proof that a video was published.
+    success = page.get_by_text(re.compile(r'^(发表成功|发布成功)[！!。]?$')).filter(visible=True)
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        if success.count():
+            return
+        _check_channels_validation(page)
+        page.wait_for_timeout(500)
+    raise ValueError('视频号未返回发表成功凭据')
+
+
+def _upload_channels_video(page, file_input, media_path, *, timeout_seconds=180):
+    """Wait for Channels' server-side clip result, not its always-present form.
+
+    File selection and even a local blob preview precede upload completion.
+    The observed clip API returns flag=2 while processing, then flag=1 plus
+    the resulting URL, duration and file size when the video can be posted.
+    """
+    prefix = '/micro/content/cgi-bin/mmfinderassistant-bin/post/'
+    state = {'clip_started': False, 'ready': False, 'error': None}
+
+    def observe(response):
+        parsed = urlparse(response.url)
+        if parsed.hostname != 'channels.weixin.qq.com' or parsed.path not in (
+                prefix + 'post_clip_video', prefix + 'post_clip_video_result'):
+            return
+        try:
+            payload = response.json()
+        except Exception:
+            return
+        if not isinstance(payload, dict):
+            return
+        if response.status >= 400 or payload.get('errCode') not in (None, 0):
+            state['error'] = '视频号上传或转码接口返回失败，请核对云端页面提示'
+            return
+        data = payload.get('data') or {}
+        if not isinstance(data, dict):
+            return
+        if parsed.path.endswith('/post_clip_video'):
+            state['clip_started'] = bool(data.get('clipKey'))
+        elif state['clip_started'] and data.get('flag') == 1:
+            try:
+                state['ready'] = (bool(data.get('url')) and float(data.get('duration', 0)) > 0
+                                  and int(data.get('fileSize', 0)) > 0)
+            except (TypeError, ValueError):
+                pass
+
+    page.on('response', observe)
+    try:
+        file_input.set_input_files(media_path, timeout=30000)
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            if state['error']:
+                raise ValueError(state['error'])
+            if state['ready']:
+                # Allow the provider's response handler to update its form
+                # model before editing or pressing the publish button.
+                _wait_video_editor(page)
+                page.wait_for_timeout(500)
+                logger.info('Channels video upload and processing confirmed')
+                return
+            failures = page.get_by_text(re.compile(r'^(上传失败|视频上传失败|转码失败|视频处理失败|格式不支持)')).filter(visible=True)
+            if failures.count():
+                raise ValueError('视频号提示上传或视频处理失败；尚未进入发表步骤')
+            page.wait_for_timeout(500)
+        raise ValueError(f'视频号在{timeout_seconds}秒内未确认上传及转码完成；尚未进入发表步骤，请检查云端上传进度后重试')
+    finally:
+        page.remove_listener('response', observe)
+
+
+def _open_channels_upload(page):
+    """Enter through the dashboard so Channels initializes its micro frontend.
+
+    A cold navigation to /platform/post/create can silently leave the dashboard
+    visible with an uninitialized /micro/content/post/create frame.
+    """
+    page.goto('https://channels.weixin.qq.com/platform', wait_until='domcontentloaded', timeout=30000)
+    entry = page.get_by_role('button', name='发表视频', exact=True).filter(visible=True)
+    entry.first.wait_for(state='visible', timeout=30000)
+    if entry.count() != 1:
+        raise ValueError('视频号首页的发表视频入口不唯一，已停止上传')
+    entry.click(timeout=30000)
+    # Cover and product-image uploaders can coexist with the video uploader.
+    # The actual video input is hidden, so do not filter it by visibility.
+    upload = page.locator('input[type="file"][accept*="video"]')
+    try:
+        upload.first.wait_for(state='attached', timeout=45000)
+    except Exception as exc:
+        if _closed_browser_error(exc):
+            raise
+        raise ValueError('已打开发表视频入口，但未加载出视频上传控件；请检查视频号登录状态和云端页面提示') from exc
+    if upload.count() != 1:
+        raise ValueError('视频号的视频上传控件不唯一，已停止上传')
+    return upload
+
 
 def _publish_button(page, platform):
     # Match an actual submit button, not navigation such as “作品发布”,
@@ -404,6 +597,44 @@ def _apply_geolocation(context, platform, geolocation):
     context.set_geolocation({'latitude': latitude, 'longitude': longitude, 'accuracy': accuracy})
     parsed = urlparse(PLATFORM_URLS[platform])
     context.grant_permissions(['geolocation'], origin=f'{parsed.scheme}://{parsed.netloc}')
+    if platform == 'wechat_channels':
+        _configure_channels_location(context, latitude, longitude)
+
+
+def _configure_channels_location(context, latitude, longitude):
+    """Channels desktop sends zero/IP coordinates despite browser geolocation.
+
+    Supply the configured hotel coordinates only to its observed POI-search
+    endpoint; preserve provider authentication and all other request fields.
+    Tencent POI coordinates use GCJ02, while browser coordinates are WGS84.
+    """
+    from app.services.publish_location import _gcj_offset
+    if 72.004 <= longitude <= 137.8347 and 0.8293 <= latitude <= 55.8271:
+        lat_offset, lon_offset = _gcj_offset(latitude, longitude)
+        latitude, longitude = latitude + lat_offset, longitude + lon_offset
+    context._campfire_channels_coordinates = {'latitude': latitude, 'longitude': longitude}
+    if getattr(context, '_campfire_channels_location_handler', None):
+        return
+
+    def apply_hotel_coordinates(route):
+        request = route.request
+        parsed = urlparse(request.url)
+        if (parsed.scheme != 'https' or parsed.hostname != 'channels.weixin.qq.com'
+                or parsed.path != '/micro/content/cgi-bin/mmfinderassistant-bin/helper/helper_search_location'
+                or request.method != 'POST'):
+            return route.continue_()
+        try:
+            data = request.post_data_json
+        except Exception:
+            return route.continue_()
+        if not isinstance(data, dict) or not all(key in data for key in ('latitude', 'longitude')):
+            return route.continue_()
+        data = {**data, **context._campfire_channels_coordinates}
+        route.continue_(post_data=json.dumps(data, ensure_ascii=False))
+
+    context.route('https://channels.weixin.qq.com/micro/content/cgi-bin/mmfinderassistant-bin/helper/helper_search_location*',
+                  apply_hotel_coordinates)
+    context._campfire_channels_location_handler = apply_hotel_coordinates
 
 def _wait_video_editor(page):
     """Accept the separate-title and shared rich-text editor layouts."""
@@ -714,15 +945,62 @@ def _select_publish_location_impl(page, location_name):
     if not selected_matches:
         raise ValueError('地点搜索面板已关闭，但页面未显示已选酒店地点')
 
+def _select_channels_publish_location(page, location_name):
+    """Select the hotel POI, never its nearby car park or the default city."""
+    import unicodedata
+    # Tencent's listing uses 云 for the configured hotel name's 雲. All other
+    # characters must match, including the full hotel name and its suffix.
+    characters = [c for c in unicodedata.normalize('NFKC', location_name) if not c.isspace()]
+    pattern = re.compile(r'^\s*' + r'\s*'.join('[云雲]' if c in '云雲' else re.escape(c)
+                                            for c in characters) + r'\s*$')
+    row = page.locator('.post-position-wrap:visible')
+    _location_step('等待视频号位置控件', lambda: row.wait_for(state='visible', timeout=15000))
+    display = row.locator('.position-display')
+    if display.locator('.place:visible').filter(has_text=pattern).count() == 1:
+        return
+    search = row.locator('input[placeholder="搜索附近位置"]:visible')
+    # Tabbing out of the short-title input can already open this dropdown.
+    # Clicking it again closes it and causes a misleading search timeout.
+    if search.count() == 0:
+        _location_step('打开视频号位置下拉框', lambda: display.click(timeout=10000))
+    _location_step('等待视频号附近位置搜索框', lambda: search.wait_for(state='visible', timeout=10000))
+    _location_step('填写视频号酒店搜索名称', lambda: search.fill(location_name, timeout=10000))
+    _location_step('搜索视频号酒店位置', lambda: row.locator('.weui-desktop-search__btn:visible').click(timeout=10000))
+    candidates = row.locator('.location-filter-wrap .option-item .name:visible').filter(has_text=pattern)
+    _location_step('等待视频号酒店全名结果（不选停车场或城市）',
+                   lambda: candidates.first.wait_for(state='visible', timeout=20000))
+    if candidates.count() != 1:
+        raise ValueError('视频号酒店地点无唯一全名匹配，已停止发布')
+    _location_step('选中视频号酒店地点', lambda: candidates.click(timeout=10000))
+    _location_step('确认视频号位置面板关闭', lambda: search.wait_for(state='hidden', timeout=10000))
+    selected = display.locator('.place:visible').filter(has_text=pattern)
+    _location_step('确认视频号已选中酒店而非默认城市',
+                   lambda: selected.wait_for(state='visible', timeout=10000))
+
+
 def _fill_channels_copy(page, title, description):
-    title_box = page.locator('input[placeholder*="标题"], input[placeholder*="短标题"]')
-    body_box = page.locator('textarea, [contenteditable="true"]')
-    if title_box.count():
-        title_box.first.fill(title)
-        body_box.last.fill(description or title)
-    else:
-        # Some video-account pages expose one shared title/description editor.
-        body_box.last.fill(title + ('\n' + description if description else ''))
+    title_box = page.locator('input[placeholder*="标题"]:visible')
+    # Channels uses contenteditable="". Hidden product-link textareas are
+    # mounted alongside it and must never receive the publishing description.
+    body_box = page.locator('textarea:visible, [contenteditable]:not([contenteditable="false"]):visible')
+    if title_box.count() > 1 or body_box.count() != 1:
+        raise ValueError('无法唯一识别视频号可见标题和正文编辑框，已停止提交')
+    if title_box.count() == 1:
+        maximum = title_box.get_attribute('maxlength')
+        # The live Channels input has no maxlength attribute; its Vue form
+        # validates a separate 16-character limit after typing.
+        limit = min(16, int(maximum)) if maximum and maximum.isdigit() and int(maximum) > 0 else 16
+        # Channels rejects separators such as ｜ and emoji even within its
+        # length limit. Keep letters/numbers and replace punctuation by spaces.
+        import unicodedata
+        clean = ''.join(c if unicodedata.category(c)[0] in ('L', 'N') else ' ' for c in title)
+        clean = re.sub(r'\s+', ' ', clean).strip() or '酒店旅居时光'
+        short_title = clean.encode('utf-16-le')[:limit * 2].decode('utf-16-le', errors='ignore').strip()
+        title_box.fill(short_title, timeout=15000)
+        title_box.press('Tab')
+    # Retain the full promotional title even when the separate short title
+    # has a provider-imposed length limit.
+    body_box.fill(title + ('\n' + description if description else ''), timeout=15000)
 
 @browser_operation
 def read_metrics(company_id, platform):

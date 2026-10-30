@@ -171,8 +171,6 @@ class OperationsWorkflow:
             local_storyboard=fallback_plan(sources['selected_assets'],video_duration)
             sections.append({'title':'结构化分镜草稿','content':'\n'.join(
                 f"镜头{s['shot_number']}｜{s['duration_seconds']:.2f}秒｜{s['purpose']}｜{s['framing']}｜{s['camera_movement']}｜素材{s['source_asset_id']}" for s in local_storyboard) + f'\n按每镜5秒生成，预计{len(local_storyboard)}个模型片段，成片按分镜剪取。'})
-            if len(selected_assets)<4:
-                sections.append({'title':'素材不足提示','content':'独立场景少于4个，将重复素材并调整景别；建议补充不同场景的清晰照片。'})
         report = "\n\n".join(f"## {s['title']}\n{s['content']}" for s in sections)
         # Forbidden brand words must not leak into a publishable draft via user goals.
         for word in company.marketing_forbidden_words or []:

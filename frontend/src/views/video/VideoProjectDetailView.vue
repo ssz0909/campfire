@@ -56,10 +56,17 @@
         <div class="video-preview"><video :src="previewUrl" :poster="project.output_thumbnail_url" controls /></div>
       </AppCard>
       <AppCard v-if="project.quality_check_result?.note">{{ project.quality_check_result.note }}</AppCard>
+      <AppCard v-if="['draft','pending_review'].includes(project.status)">
+        <h2 class="section-title">自选背景音乐</h2>
+        <MusicPicker :company-id="companyId" v-model:music-asset-id="musicAssetId" v-model:music-volume="musicVolume" />
+        <n-button type="primary" :loading="musicLoading" :disabled="project.status==='pending_review' && !musicAssetId" @click="saveMusic">
+          {{ project.status==='draft'?'保存配乐设置':'替换成片配乐（不重新生成视频）' }}
+        </n-button>
+      </AppCard>
       <AppCard v-if="project.status === 'failed'">重新执行会复用已成功的镜头，重新生成失败镜头，可能产生新的模型费用。提交结果不确定时会阻止重试并提示核对中转任务。</AppCard>
       <AppCard v-if="project.shots?.some(s=>s.purpose)">
         <h2 class="section-title">分镜与节奏 · {{ project.target_duration_seconds }}秒</h2>
-        <p v-for="shot in project.shots" :key="shot.id">{{ shot.sequence_number }} · {{ shot.duration_seconds }}秒 · {{ shot.purpose }} · {{ shot.framing }} · {{ shot.camera_movement }}<br>{{ shot.visual_description }}</p>
+        <p v-for="shot in project.shots" :key="shot.id">{{ shot.sequence_number }} · {{ shot.duration_seconds }}秒 · {{ shot.purpose }} · {{ shot.framing }} · {{ shot.camera_movement }}<br>{{ shot.visual_description }}<br><span v-if="shot.transition_out">转场：{{ shot.transition_out }} {{ shot.transition_duration_seconds || 0 }}秒 · {{ shot.transition_notes }}</span></p>
       </AppCard>
       <AppCard v-if="sourceAssets.length" class="source-assets"><h2 class="section-title">本片使用素材</h2><div v-for="asset in sourceAssets" :key="asset.id">{{ asset.name }} · {{ asset.category || '未分类' }} · {{ (asset.tags||[]).join('、') }}</div></AppCard>
       <AppCard v-if="project.publish_title" class="publish-copy">
@@ -158,6 +165,7 @@ import { useAuthStore } from '@/stores/auth'
 import { videoProjectsApi } from '@/api/videoProjects'
 import { assetsApi } from '@/api/assets'
 import type { VideoProject } from '@/types/videoProject'
+import MusicPicker from '@/components/video/MusicPicker.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -168,6 +176,7 @@ const companyId = computed(() => authStore.currentCompanyId!)
 const loading = ref(true)
 const actionLoading = ref(false)
 const approvalLoading = ref(false)
+const musicLoading=ref(false),musicAssetId=ref<string|null>(null),musicVolume=ref(0.25)
 const actionError = ref('')
 const project = ref<VideoProject | null>(null)
 const previewUrl = ref('')
@@ -232,11 +241,25 @@ onMounted(async () => {
   try {
     const res = await videoProjectsApi.get(companyId.value, route.params.id as string)
     project.value = res.data
+    musicAssetId.value=res.data.music_asset_id||null
+    musicVolume.value=res.data.music_volume??0.25
     await refreshProject()
   } finally {
     loading.value = false
   }
 })
+
+async function saveMusic() {
+  if(!project.value || musicLoading.value)return
+  musicLoading.value=true;actionError.value=''
+  try {
+    const res=await videoProjectsApi.updateMusic(companyId.value,project.value.id,
+      {music_asset_id:musicAssetId.value,music_volume:musicVolume.value},project.value.status==='draft')
+    project.value=res.data
+    if(res.data.output_video_url){previewUrl.value=res.data.output_video_url;previewAssetId=res.data.output_asset_id}
+  } catch(e:any){actionError.value=e.response?.data?.detail||'配乐保存失败，请重试'}
+  finally {musicLoading.value=false}
+}
 
 async function startProject() {
   if (!project.value) return

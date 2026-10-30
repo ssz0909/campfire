@@ -7,7 +7,16 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 
-class VideoProjectCreate(BaseModel):
+class MusicSettings(BaseModel):
+    music_asset_id: uuid.UUID | None = None
+    music_volume: float = Field(default=0.25, ge=0, le=1, allow_inf_nan=False)
+
+
+class DefaultMusicSettings(MusicSettings):
+    selection_mode: Literal['fixed','random'] = 'fixed'
+
+
+class VideoProjectCreate(MusicSettings):
     title: str
     script: str | None = None
     creation_mode: str
@@ -29,6 +38,8 @@ class VideoProjectCreate(BaseModel):
 
 
 class VideoProjectUpdate(BaseModel):
+    music_asset_id: uuid.UUID | None = None
+    music_volume: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
     title: str | None = None
     marketing_goal: str | None = None
     target_audience: str | None = None
@@ -55,6 +66,8 @@ class ShotRegenerateRequest(BaseModel):
 
 
 class VideoProjectResponse(BaseModel):
+    music_asset_id: uuid.UUID | None = None
+    music_volume: float = 0.25
     id: uuid.UUID
     company_id: uuid.UUID
     created_by: uuid.UUID

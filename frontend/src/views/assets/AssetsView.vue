@@ -15,10 +15,10 @@
 
     <!-- Upload zone -->
     <UploadZone
-      accept="image/*,video/*,.pdf,.doc,.docx"
+      accept="image/*,video/*,.mp3,.wav,.pdf,.doc,.docx"
       multiple
       :title="t('Click or drag files to upload')"
-      :hint="t('Supports images, videos, PDFs, and documents')"
+      hint="支持图片、视频、MP3/WAV音乐及文档"
       @files="handleUpload"
     />
     <p class="vision-hint">上传图片后会用 .env 配置的视觉大模型识别画面、类别和主题标签，可能产生模型用量；未配置视觉能力时可手动补标签或重试。</p>
@@ -39,14 +39,16 @@
     <!-- Filters -->
     <div class="asset-filters">
       <n-input v-model:value="search" clearable placeholder="按主题、标签、描述筛选" @update:value="loadAssets" />
-      <n-select v-model:value="categoryFilter" clearable placeholder="全部类别" :options="categoryOptions" @update:value="loadAssets" />
-      <n-radio-group v-model:value="typeFilter" @update:value="loadAssets">
+      <n-select v-if="typeFilter !== 'audio'" v-model:value="categoryFilter" clearable placeholder="全部场景类别" :options="categoryOptions" @update:value="loadAssets" />
+      <n-radio-group v-model:value="typeFilter" @update:value="changeType">
         <n-radio-button value="">{{ t('All') }}</n-radio-button>
         <n-radio-button value="image">{{ t('Images') }}</n-radio-button>
         <n-radio-button value="video">{{ t('Videos') }}</n-radio-button>
+        <n-radio-button value="audio">音频</n-radio-button>
         <n-radio-button value="document">{{ t('Documents') }}</n-radio-button>
       </n-radio-group>
     </div>
+    <p v-if="typeFilter === 'audio'" class="vision-hint">在上方上传 MP3/WAV，上传完成后可在这里试听，再到视频详情选择为背景音乐。</p>
 
     <template v-if="loading">
       <div class="assets-grid">
@@ -161,6 +163,10 @@ const listColumns = computed<DataTableColumns<Asset>>(() => [
 ])
 
 let visionTimer:ReturnType<typeof setInterval>|undefined
+function changeType() {
+  categoryFilter.value=null
+  loadAssets()
+}
 onMounted(() => { loadAssets(); visionTimer=setInterval(()=>{if(assets.value.some(a=>['pending','running'].includes(a.metadata?.vision_analysis?.status||'')))loadAssets()},3000) })
 onUnmounted(()=>{if(visionTimer)clearInterval(visionTimer)})
 
@@ -181,18 +187,25 @@ async function saveAsset(){if(!editingAsset.value)return;editBusy.value=true;try
 async function analyzeAsset(asset:Asset){try{const result=await assetsApi.analyze(companyId.value,asset.id);Object.assign(asset,result.data);message.success('图片识别完成')}catch(e:any){message.error(e.response?.data?.detail||'图片识别失败，请检查视觉模型配置')}}
 
 async function handleUpload(files: File[]) {
+  const uploadedTypes=new Set<string>()
   for (const file of files) {
     const upload = { name: file.name, progress: 0, error: false }
     uploads.value.push(upload)
     try {
-      await assetsApi.upload(companyId.value, {
+      const result=await assetsApi.upload(companyId.value, {
         file,
         onProgress: (p) => { upload.progress = p },
       })
+      uploadedTypes.add(result.data.asset_type)
       upload.progress = 100
     } catch {
       upload.error = true
     }  }
+  if(uploadedTypes.size){
+    typeFilter.value=uploadedTypes.size===1?[...uploadedTypes][0]:''
+    categoryFilter.value=null
+    search.value=''
+  }
   await loadAssets()
   setTimeout(() => { uploads.value = [] }, 2000)
 }

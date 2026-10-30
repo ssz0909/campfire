@@ -401,3 +401,93 @@ def set_ddll_ticket(
                     resource_type="platform", resource_id="ddll_ticket"))
     db.commit()
     return Response(status_code=204)
+
+
+class LLMSettingsRequest(BaseModel):
+    base_url: str
+    model: str
+    api_key: str | None = None
+
+
+@router.get('/model-settings')
+def read_model_settings(
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_platform_admin),
+) -> Any:
+    from app.services.model_settings import get_llm_settings, LLM_SETTINGS_KEY
+    from app.connectors.hotel.models import PlatformKeyValue
+    values = get_llm_settings(db)
+    return {'base_url': values['base_url'], 'model': values['model'],
+            'api_key_configured': bool(values['api_key']),
+            'source': 'database' if db.get(PlatformKeyValue, LLM_SETTINGS_KEY) else 'env'}
+
+
+@router.put('/model-settings')
+def update_model_settings(
+    data: LLMSettingsRequest,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_platform_admin),
+) -> Any:
+    from urllib.parse import urlsplit
+    from app.services.model_settings import get_llm_settings, save_llm_settings
+    from app.models.audit_log import AuditLog
+    base_url, model = data.base_url.strip().rstrip('/'), data.model.strip()
+    try:
+        url = urlsplit(base_url)
+        valid_url = url.scheme in ('http', 'https') and url.hostname and not (
+            url.username or url.password or url.query or url.fragment)
+        url.port
+    except ValueError:
+        valid_url = False
+    if not valid_url:
+        raise HTTPException(422, '请输入有效的 HTTP/HTTPS 接口地址，不包含账号、查询参数或片段')
+    api_key = (data.api_key or '').strip() or get_llm_settings(db)['api_key']
+    if not model or not api_key:
+        raise HTTPException(422, '模型名称和 API Key 不能为空')
+    save_llm_settings(db, {'base_url': base_url, 'model': model, 'api_key': api_key})
+    db.add(AuditLog(user_id=admin.id, action='platform.llm.settings.update',
+                    resource_type='platform', resource_id='llm_settings'))
+    db.commit()
+    return read_model_settings(db, admin)
+
+
+@router.get('/video-model-settings')
+def read_video_model_settings(
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_platform_admin),
+) -> Any:
+    from app.services.model_settings import get_video_settings, VIDEO_SETTINGS_KEY
+    from app.connectors.hotel.models import PlatformKeyValue
+    values = get_video_settings(db)
+    return {'base_url': values['base_url'], 'model': values['model'],
+            'api_key_configured': bool(values['api_key']),
+            'source': 'database' if db.get(PlatformKeyValue, VIDEO_SETTINGS_KEY) else 'env'}
+
+
+@router.put('/video-model-settings')
+def update_video_model_settings(
+    data: LLMSettingsRequest,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_platform_admin),
+) -> Any:
+    from urllib.parse import urlsplit
+    from app.services.model_settings import get_video_settings, save_video_settings
+    from app.models.audit_log import AuditLog
+    base_url, model = data.base_url.strip().rstrip('/'), data.model.strip()
+    try:
+        url = urlsplit(base_url)
+        valid_url = url.scheme in ('http', 'https') and url.hostname and not (
+            url.username or url.password or url.query or url.fragment)
+        url.port
+    except ValueError:
+        valid_url = False
+    if not valid_url:
+        raise HTTPException(422, '请输入有效的 HTTP/HTTPS 接口地址，不包含账号、查询参数或片段')
+    api_key = (data.api_key or '').strip() or get_video_settings(db)['api_key']
+    if not model or not api_key:
+        raise HTTPException(422, '模型名称和 API Key 不能为空')
+    save_video_settings(db, {'base_url': base_url, 'model': model, 'api_key': api_key})
+    db.add(AuditLog(user_id=admin.id, action='platform.video.settings.update',
+                    resource_type='platform', resource_id='video_settings'))
+    db.commit()
+    return read_video_model_settings(db, admin)

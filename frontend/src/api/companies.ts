@@ -2,6 +2,9 @@ import apiClient from './client'
 import type { Company, CompanyStore, CompanyProduct, CreateCompanyRequest } from '@/types/company'
 
 export const companiesApi = {
+  setDefaultVideoMusic(id:string,data:{music_asset_id:string|null;music_volume:number;selection_mode?:'fixed'|'random'}):Promise<{data:Company}> {
+    return apiClient.put(`/companies/${id}/default-video-music`,data)
+  },
   setPublishLocation(id: string, data: Record<string, unknown>): Promise<{data: Company}> {
     return apiClient.put(`/companies/${id}/publish-location`, data)
   },

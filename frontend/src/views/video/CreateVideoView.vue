@@ -95,8 +95,11 @@
               />
             </n-form-item>
           </template>
+          <n-form-item label="背景音乐（可选）">
+            <MusicPicker :company-id="companyId" v-model:music-asset-id="form.music_asset_id" v-model:music-volume="form.music_volume" />
+          </n-form-item>
         </n-form>
-        <p class="create-hint">每个成片镜头约1.5至3.5秒，开头不超过2秒。建议提供多个不同场景的清晰图片；模型片段生成后按分镜剪取，按生成镜头分别计费。相同图片可能以不同景别复用，请审核裁切与主体。</p>
+        <p class="create-hint">每个成片镜头约1.5至3.5秒，开头不超过2秒。建议提供多个不同场景的清晰图片；模型片段生成后按分镜剪取，按生成镜头分别计费。每张图片只使用一次，素材不足时请补充。</p>
 
         <p v-if="errorMsg" class="create-error" role="alert">{{ errorMsg }}</p>
       </AppCard>
@@ -124,6 +127,7 @@ import { useAuthStore } from '@/stores/auth'
 import { videoProjectsApi } from '@/api/videoProjects'
 import { assetsApi } from '@/api/assets'
 import type { CreationMode } from '@/types/videoProject'
+import MusicPicker from '@/components/video/MusicPicker.vue'
 
 const router = useRouter()
 const { t } = useI18n()
@@ -143,6 +147,8 @@ const form = reactive({
   reference_asset_id: null as string | null,
   selected_asset_ids: [] as string[],
   target_duration_seconds: 30,
+  music_asset_id: null as string|null,
+  music_volume: 0.25,
 })
 
 const rules: FormRules = {
@@ -185,6 +191,8 @@ async function handleCreate() {
       selected_asset_ids: form.selected_asset_ids,
       aspect_ratio: '9:16',
       target_duration_seconds: form.target_duration_seconds,
+      music_asset_id: form.music_asset_id,
+      music_volume: form.music_volume,
     })
     router.push(`/video/${res.data.id}`)
   } catch (err: unknown) {

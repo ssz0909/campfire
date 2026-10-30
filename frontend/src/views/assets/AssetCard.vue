@@ -22,9 +22,11 @@
     <div class="asset-card__body">
       <p class="asset-card__name" :title="asset.name">{{ asset.name }}</p>
       <div class="asset-card__meta">
-        <AppBadge>{{ asset.asset_type }}</AppBadge>
+        <AppBadge>{{ asset.asset_type === 'audio' ? '音频' : asset.asset_type }}</AppBadge>
         <span class="asset-card__size">{{ formatBytes(asset.file_size_bytes) }}</span>
       </div>
+      <audio v-if="asset.asset_type === 'audio' && asset.processing_status === 'ready' && asset.file_url"
+        :src="asset.file_url" controls preload="none" class="asset-card__audio" @click.stop />
       <div v-if="asset.tags?.length" class="asset-card__tags">
         <AppBadge v-for="tag in asset.tags.slice(0, 3)" :key="tag">{{ tag }}</AppBadge>
       </div>
@@ -89,6 +91,7 @@ function categoryName(value: string) { return ({exterior:'酒店外观',lobby:'�
   display: flex;
   flex-direction: column;
 }
+.asset-card__audio { display:block;width:100%;max-width:100%;margin-top:12px; }
 
 .asset-card__thumb {
   background: var(--surface-sunken);

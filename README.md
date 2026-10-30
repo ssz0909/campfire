@@ -202,3 +202,12 @@ AIwork/
 4. Do not commit `.env` or any file containing real credentials
 5. Run `docker-compose exec frontend npm run typecheck` before frontend PRs
 6. Open a PR against `main`; describe what changed and how to test it
+
+### 后台大模型配置
+
+平台管理员可在「平台管理 → 大模型配置」维护 `LLM_BASE_URL`、`LLM_MODEL` 和
+`LLM_API_KEY`。后台配置加密保存在现有 `platform_key_values` 表中，优先于 `.env`；
+未保存后台配置时仍使用环境配置。API Key 不回显，编辑时留空保留原密钥。
+保存后，数字员工及素材视觉分析的后续调用（包括独立 worker）读取新配置，无需重启；
+已经发出的请求继续使用原配置。生产环境沿用 `CREDENTIAL_ENCRYPTION_KEY` 加密密钥。
+视频生成的 `VIDEO_*` 配置仍由环境变量管理。

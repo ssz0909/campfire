@@ -28,7 +28,16 @@ TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engin
 
 
 @pytest.fixture(autouse=True)
-def isolate_model_credentials(monkeypatch):
+def isolate_model_credentials(monkeypatch, db):
+    from contextlib import contextmanager
+
+    @contextmanager
+    def model_session():
+        # Reuse the fixture transaction; closing a second SQLite StaticPool
+        # session would roll back the caller's transaction on the same connection.
+        yield db
+
+    monkeypatch.setattr("app.services.model_settings.SessionLocal", model_session)
     # Unit tests must never call paid services using the developer's .env.
     from app.config import settings
     for name in ('LLM_BASE_URL', 'LLM_MODEL', 'LLM_API_KEY', 'VIDEO_BASE_URL', 'VIDEO_MODEL', 'VIDEO_API_KEY'):

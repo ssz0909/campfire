@@ -14,6 +14,7 @@ from app.schemas.video_project import (
     VideoProjectUpdate,
     StoryboardUpdate,
     ShotRegenerateRequest,
+    MusicSettings,
 )
 from app.services.video_service import VideoService
 from app.utils.pagination import PaginatedResponse
@@ -115,6 +116,13 @@ def approve_project(
     from app.services.execution_loop import publish_approved_project
     background_tasks.add_task(publish_approved_project, project.id)
     return project
+
+
+@router.post('/{company_id}/video-projects/{pid}/music', response_model=VideoProjectResponse)
+def replace_music(company_id: uuid.UUID, pid: uuid.UUID, data: MusicSettings,
+    current_user: User = Depends(require_permission(Permission.VIDEO_CREATE)), db: Session = Depends(get_db)):
+    project = VideoService(db).replace_music(company_id,pid,current_user.id,data)
+    return _with_output_preview(project,db)
 
 
 @router.get("/{company_id}/video-projects/{pid}/storyboard")

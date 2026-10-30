@@ -25,6 +25,11 @@ class VideoService:
         data: VideoProjectCreate,
     ) -> VideoProject:
         values=data.model_dump()
+        if 'music_asset_id' not in data.model_fields_set:
+            from app.services.video_music import resolve_music_settings
+            values.update(resolve_music_settings(self.db,company_id))
+        from app.services.video_music import music_asset
+        music_asset(self.db,company_id,values.get('music_asset_id'))
         if values.get('reference_asset_id') and not values.get('selected_asset_ids'):
             values['selected_asset_ids']=[values['reference_asset_id']]
         values['selected_asset_ids']=[str(v) for v in self._validate_selected_assets(company_id,values.get('selected_asset_ids') or [])]
@@ -88,6 +93,13 @@ class VideoService:
     ) -> VideoProject:
         project = self.get_project(company_id, project_id)
         updates=data.model_dump(exclude_unset=True)
+        if any(key in updates for key in ('music_asset_id','music_volume')):
+            if project.project_status != 'draft':
+                raise HTTPException(409,'生成后请使用替换背景音乐功能；仅草稿可直接修改配乐配置')
+            if updates.get('music_volume',0.25) is None:
+                raise HTTPException(422,'背景音乐音量不能为空')
+            from app.services.video_music import music_asset
+            music_asset(self.db,company_id,updates.get('music_asset_id',project.music_asset_id))
         if any(key in updates for key in ('selected_asset_ids','target_duration_seconds','aspect_ratio')):
             if project.project_status!='draft':raise HTTPException(409,'只能在生成前调整分镜、时长和素材')
             project.storyboard=None
@@ -149,6 +161,8 @@ class VideoService:
         if project.creation_mode not in ("prompt_to_video", "ai_creative", "reference_inspired", "reference_inspired_video"):
             raise HTTPException(status_code=400, detail="不支持的视频创建模式")
         from app.services.video_generation import reference_url
+        from app.services.video_music import music_asset
+        music_asset(self.db,company_id,project.music_asset_id)
         try:
             self._validate_selected_assets(company_id,project.selected_asset_ids or [])
             if project.selected_asset_ids and not project.reference_asset_id:
@@ -171,12 +185,58 @@ class VideoService:
             descriptors=[{'id':str(v),'name':by_id[str(v)].name,'description':((by_id[str(v)].asset_metadata or {}).get('vision_analysis') or {}).get('visual_description') or by_id[str(v)].source_description} for v in ids]
             project.target_duration_seconds=max(15,min(60,project.target_duration_seconds or 30))
             project.storyboard=fallback_plan(descriptors,project.target_duration_seconds)
+        if not retry and project.storyboard and project.storyboard[0].get('planning_version') == 2:
+            from app.services.video_director import validate_plan
+            try:
+                validate_plan(project.storyboard, [{'id':str(v)} for v in project.selected_asset_ids or []],project.target_duration_seconds)
+            except ValueError as exc:
+                raise HTTPException(422,str(exc)) from exc
         project.quality_check_result = None
         project.review_status = 'pending_review'
         project.project_status = "analyzing"
         self.db.commit()
         self.db.refresh(project)
         enqueue(project_id)
+        return project
+
+    def replace_music(self, company_id, project_id, user_id, data):
+        from app.models.asset import Asset
+        from app.services.video_music import music_asset, apply_music
+        from app.services.storage_service import StorageService
+        from app.services.media_processing import enrich_video_asset
+        from app.config import settings
+        project = self.db.query(VideoProject).filter_by(id=project_id, company_id=company_id,
+            is_deleted=False).with_for_update().first()
+        if not project:
+            raise HTTPException(404,'Video project not found')
+        if project.project_status != 'pending_review' or not project.output_asset_id:
+            raise HTTPException(409,'仅待审核的成片可以替换配乐；已审核作品保持原文件')
+        if not data.music_asset_id:
+            raise HTTPException(422,'请选择背景音乐素材')
+        music_asset(self.db,company_id,data.music_asset_id)
+        source = self.db.query(Asset).filter_by(id=project.output_asset_id,company_id=company_id,
+            is_deleted=False,asset_type='video',processing_status='ready').first()
+        if not source:
+            raise HTTPException(422,'原成片不存在或不可用')
+        storage = StorageService(settings.STORAGE_BACKEND)
+        project.music_asset_id, project.music_volume = data.music_asset_id,data.music_volume
+        try:
+            content = apply_music(self.db,project,storage.get_file(source.file_key),storage)
+        except Exception as exc:
+            self.db.rollback()
+            raise HTTPException(422,'配乐合成失败，请检查音频文件及服务日志；原成片已保留') from exc
+        key = f'{company_id}/generated/{uuid.uuid4()}.mp4'
+        asset = Asset(company_id=company_id,uploaded_by=user_id,name=source.name.split(' · 自选配乐')[0]+' · 自选配乐',
+            original_filename='soundtrack.mp4',file_key=key,file_url=storage.upload_file(content,key,'video/mp4'),
+            asset_type='video',mime_type='video/mp4',file_size_bytes=len(content),processing_status='ready',
+            asset_metadata={'source_video_asset_id':str(source.id),'music_asset_id':str(data.music_asset_id),'music_alignment_version':2})
+        enrich_video_asset(asset,storage,content)
+        self.db.add(asset);self.db.flush()
+        project.output_asset_id = asset.id
+        project.quality_check_result = {**(project.quality_check_result or {}),
+            'note':'已替换为上传的背景音乐，跳过开头静音并对齐成片时长，模型原音轨已移除，请预览并审核。',
+            'music_asset_id':str(data.music_asset_id),'music_volume':data.music_volume}
+        self.db.commit();self.db.refresh(project)
         return project
 
     def _prepare_retry(self, project):

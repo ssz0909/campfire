@@ -106,3 +106,50 @@ def enrich_video_asset(asset, storage, content=None):
     thumbnail_key = asset.file_key.rsplit('.',1)[0] + '_thumb.jpg'
     asset.thumbnail_url = storage.upload_file(thumbnail,thumbnail_key,'image/jpeg')
     asset.asset_metadata = {**(asset.asset_metadata or {}),'media_verified':True}
+
+
+def inspect_audio(content):
+    with tempfile.TemporaryDirectory(prefix='campfire-audio-') as directory:
+        source = Path(directory) / 'music'
+        source.write_bytes(content)
+        probe = subprocess.run(['ffprobe','-v','error','-protocol_whitelist','file,pipe',
+            '-show_entries','stream=codec_type,codec_name:format=duration','-of','json',str(source)],
+            capture_output=True,check=True,timeout=30)
+        data = json.loads(probe.stdout)
+        audio = next((s for s in data.get('streams',[]) if s.get('codec_type')=='audio'),None)
+        duration = float(data.get('format',{}).get('duration',0))
+        import math
+        if not audio or not math.isfinite(duration) or duration <= 0:
+            raise ValueError('背景音乐必须包含有效音轨和时长')
+        return {'duration_seconds':duration,'codec':audio.get('codec_name')}
+
+
+def replace_background_music(video, music, volume=0.25):
+    """Replace all original audio; copy video frames without model generation."""
+    import math
+    volume = float(volume)
+    if not math.isfinite(volume) or not 0 <= volume <= 1:
+        raise ValueError('背景音乐音量需在0至1之间')
+    inspect_audio(music)
+    metadata, _ = inspect_video(video)
+    duration = metadata['duration_seconds']
+    fade = min(1.0,duration/4)
+    with tempfile.TemporaryDirectory(prefix='campfire-soundtrack-') as directory:
+        root = Path(directory)
+        source, soundtrack, output = root/'video.mp4',root/'music',root/'output.mp4'
+        source.write_bytes(video);soundtrack.write_bytes(music)
+        # Remove only leading silence, then reset timestamps before looping.
+        # Never remove pauses inside a song or trim based on video timestamps.
+        prepared = root/'prepared.wav'
+        subprocess.run(['ffmpeg','-v','error','-y','-protocol_whitelist','file,pipe','-i',str(soundtrack),
+            '-vn','-af','silenceremove=start_periods=1:start_duration=0.05:start_threshold=-45dB,asetpts=N/SR/TB',
+            '-t',str(duration),'-ar','48000','-ac','2','-c:a','pcm_s16le',str(prepared)],
+            capture_output=True,check=True,timeout=120)
+        inspect_audio(prepared.read_bytes())  # Entirely silent music must fail, not create a mute video.
+        subprocess.run(['ffmpeg','-v','error','-y','-protocol_whitelist','file,pipe','-i',str(source),
+            '-stream_loop','-1','-protocol_whitelist','file,pipe','-i',str(prepared),
+            '-map','0:v:0','-map','1:a:0','-c:v','copy','-c:a','aac','-ar','48000','-ac','2',
+            '-af',f'volume={volume},afade=t=in:d={fade},afade=t=out:st={max(0,duration-fade)}:d={fade}',
+            '-t',str(duration),'-movflags','+faststart',str(output)],
+            capture_output=True,check=True,timeout=180)
+        return output.read_bytes()

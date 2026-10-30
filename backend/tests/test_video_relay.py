@@ -132,6 +132,7 @@ def test_multiple_shots_resume_without_resubmitting_or_double_counting_cost(db, 
         status='completed', output_url='https://cdn.test/first.mp4')
     db.add(first); db.commit()
     client = Mock()
+    client.model = 'test-video'
     from app.providers.video.base import VideoGenerationResult
     client.submit_generation = AsyncMock(return_value=VideoGenerationResult(provider_task_id='new-shot',
         status='completed', output_url='https://cdn.test/second.mp4', cost_cents=10))
@@ -156,6 +157,7 @@ def test_multiple_shots_resume_without_resubmitting_or_double_counting_cost(db, 
     assert client.submit_generation.await_count == 1
     assert db.query(ProviderTask).filter_by(video_project_id=project.id).count() == 2
     assert db.query(CostRecord).filter_by(video_project_id=project.id).count() == 1
+    assert db.query(CostRecord).filter_by(video_project_id=project.id).one().model_name == 'test-video'
 
 
 def test_relay_error_details_are_preserved_and_secrets_redacted(monkeypatch):

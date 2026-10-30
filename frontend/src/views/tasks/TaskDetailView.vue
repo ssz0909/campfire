@@ -3,8 +3,10 @@
     <AppPageHeader :title="task?.title ?? '任务详情'" :breadcrumbs="[{ label: '任务', to: '/tasks' }]">
       <template v-if="task" #actions>
         <AppBadge :color="task.status === 'completed' ? 'success' : task.status === 'failed' ? 'danger' : 'info'">{{ taskLabels[task.status] ?? task.status }}</AppBadge>
+        <n-button v-if="schedule" :loading="busy" @click="toggleSchedule">{{ task.status === 'scheduled' ? '暂停计划' : '恢复计划' }}</n-button>
+        <n-button v-if="!schedule && task.digital_employee_id" @click="createSchedule">创建定时计划</n-button>
         <n-button v-if="canCancel" :loading="busy" @click="cancel">取消任务</n-button>
-        <n-button v-if="['failed', 'cancelled'].includes(task.status)" :loading="busy" @click="retry">重新执行</n-button>
+        <n-button v-if="!schedule && ['failed', 'cancelled'].includes(task.status)" :loading="busy" @click="retry">重新执行</n-button>
         <n-button v-if="task.status === 'failed'" @click="revise">修改目标后重建</n-button>
         <n-button v-if="task.output?.report_markdown" @click="download">下载结果</n-button>
         <n-button v-if="task.status === 'completed'" @click="router.push({ path: '/publishing', query: { task_id: task.id, title: task.title } })">发布到平台</n-button>
@@ -14,11 +16,25 @@
     <AppLoader v-if="loading" variant="card" />
     <template v-else-if="task">
       <AppCard>
-        <p>{{ task.output?.employee_name ?? '数字员工' }} · {{ taskLabels[task.status] }} · {{ task.progress }}%</p>
+        <p>{{ task.output?.employee_name ?? '数字员工' }} · {{ taskLabels[task.status] }} <span v-if="!schedule">· {{ task.progress }}%</span></p>
         <p class="hint">目标：{{ task.input_params?.goal ?? task.title }}</p>
         <p v-if="task.output?.mode_label" class="hint">{{ task.output.mode_label }} · {{ task.output.notice }}</p>
         <p v-if="task.error_message" class="error">{{ task.error_message }}</p>
       </AppCard>
+      <AppCard v-if="schedule" class="block">
+        <h2>定时计划</h2>
+        <p>{{ schedule.frequency === 'daily' ? '每天' : '每周 ' + schedule.weekdays.map(day => ['周一','周二','周三','周四','周五','周六','周日'][day]).join('、') }} {{ schedule.time }}（{{ schedule.timezone }}）</p>
+        <p v-if="task.status === 'scheduled' && schedule.next_run_at">下次执行：{{ new Date(schedule.next_run_at).toLocaleString() }}</p>
+        <p v-if="schedule.last_run_at">最近调度：{{ new Date(schedule.last_run_at).toLocaleString() }}</p>
+        <p v-if="schedule.last_error" class="error">{{ schedule.last_error }}</p>
+        <p class="hint">每轮独立记录，仍需按现有流程审核。停机期间错过的执行只补一次；暂停计划不影响已经启动的任务。</p>
+        <h2>最近执行记录</h2>
+        <p v-if="!scheduleRuns.length" class="hint">尚未触发执行。</p>
+        <div v-for="run in scheduleRuns" :key="run.id" class="loop-stage">
+          <n-button text @click="router.push(`/tasks/${run.id}`)">{{ new Date(run.created_at).toLocaleString() }} · {{ taskLabels[run.status] }}</n-button>
+        </div>
+      </AppCard>
+      <p v-if="task.input_params?.schedule_template_id" class="hint"><n-button text @click="router.push(`/tasks/${task!.input_params.schedule_template_id}`)">查看来源定时计划</n-button></p>
       <AppCard v-if="execution && (execution.enabled || !task.parent_task_id)" class="block">
         <h2>运营执行闭环 · {{ execution.status === 'not_started' ? '未启动' : loopLabels[execution.status] || execution.status }}</h2>
         <p class="hint">{{ execution.notice }}</p><p>{{ execution.next_step }}</p>
@@ -84,10 +100,13 @@ import AppBadge from '@/components/common/AppBadge.vue'
 import { useAuthStore } from '@/stores/auth'
 import { tasksApi, type ExecutionSnapshot } from '@/api/tasks'
 import { approvalsApi } from '@/api/approvals'
-import { taskLabels, type OperationTask } from '@/types/task'
+import { taskLabels, type OperationTask, type TaskSchedule } from '@/types/task'
 const auth = useAuthStore(), route = useRoute(), router = useRouter()
 const task = ref<OperationTask | null>(null), loading = ref(true), busy = ref(false), error = ref(''), reviewNote = ref('')
 const execution = ref<ExecutionSnapshot | null>(null), targets = ref<string[]>([])
+const schedule = computed(() => task.value?.input_params?.schedule as TaskSchedule | undefined)
+const scheduleRuns = ref<OperationTask[]>([])
+function toggleSchedule() { if (task.value) act(() => tasksApi.setScheduleEnabled(auth.currentCompanyId!, task.value!.id, task.value!.status !== 'scheduled')) }
 let targetsLoadedFor = ''
 const platformOptions = [{label:'抖音',value:'douyin'},{label:'视频号',value:'wechat_channels'}]
 const loopLabels: Record<string,string> = {completed:'已闭环',in_progress:'执行中',blocked:'待处理',waiting_approval:'待审批',cancelled:'已停止',pending_review:'待成片审核',published:'已发布',manual_required:'需人工确认',login_required:'需重新登录',rejected:'已退回'}
@@ -103,6 +122,14 @@ async function load() {
     const res = await tasksApi.get(auth.currentCompanyId!, id)
     if (disposed || route.params.id !== id) return
     task.value = res.data; error.value = ''
+    if (res.data.input_params?.schedule) {
+      execution.value = null
+      const runs = await tasksApi.list(auth.currentCompanyId!, {schedule_template_id: id, limit: 20})
+      if (disposed || route.params.id !== id) return
+      scheduleRuns.value = runs.data
+      if (res.data.status === 'scheduled') timer = setTimeout(load, 15000)
+      return
+    }
     const loop = await tasksApi.execution(auth.currentCompanyId!, id)
     if (disposed || route.params.id !== id) return
     execution.value = loop.data
@@ -131,6 +158,12 @@ function review(approved: boolean) {
 }
 function revise() {
   router.push({ path: '/tasks/new', query: { employee_id: task.value?.digital_employee_id, title: task.value?.title, goal: String(task.value?.input_params?.goal ?? '') + '\n修改要求：' + (task.value?.error_message ?? '') } })
+}
+function createSchedule() {
+  router.push({ path: '/tasks/new', query: { employee_id: task.value?.digital_employee_id,
+    title: task.value?.title, goal: String(task.value?.input_params?.goal ?? ''), timing: 'daily',
+    execution_loop: String(task.value?.input_params?.execution_loop ?? false),
+    platforms: (task.value?.input_params?.publish_platforms as string[] | undefined)?.join(',') ?? '' } })
 }
 function handoff(action: { role: string; title: string; goal: string }) {
   router.push({ path: '/tasks/new', query: { ...action, parent_task_id: task.value!.id } })

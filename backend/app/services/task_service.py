@@ -43,6 +43,15 @@ class TaskService:
                 raise HTTPException(status_code=400, detail="只能引用已经审批完成的任务")
         from app.services.execution_loop import configure
         params = configure(data.input_params, (data.input_params or {}).get('goal') or data.title)
+        for key in ('schedule', 'schedule_template_id', 'scheduled_for'):
+            params.pop(key, None)
+        if data.schedule:
+            if data.parent_task_id:
+                raise HTTPException(400, '定时任务不能引用固定的上游任务，请将完整目标写入任务要求')
+            from app.services.execution_automation import _next_schedule_at
+            schedule = {**data.schedule.model_dump(), 'enabled': True}
+            schedule['next_run_at'] = _next_schedule_at(schedule).isoformat()
+            params['schedule'] = schedule
         task = OperationTask(
             parent_task_id=data.parent_task_id,
             company_id=company_id,
@@ -52,7 +61,7 @@ class TaskService:
             description=data.description,
             digital_employee_id=data.digital_employee_id,
             input_params=params,
-            status="pending",
+            status="scheduled" if data.schedule else "pending",
             progress=0,
             execution_log=[],
         )
@@ -82,12 +91,17 @@ class TaskService:
         status_filter: str | None = None,
         page: int = 1,
         page_size: int = 20,
+        schedule_template_id: uuid.UUID | None = None,
     ) -> tuple[list[OperationTask], int]:
         query = self.db.query(OperationTask).filter(
             OperationTask.company_id == company_id
         )
-        if status_filter:
+        if status_filter == 'schedules':
+            query = query.filter(OperationTask.status.in_(['scheduled', 'paused']))
+        elif status_filter:
             query = query.filter(OperationTask.status == status_filter)
+        if schedule_template_id:
+            query = query.filter(OperationTask.input_params['schedule_template_id'].as_string() == str(schedule_template_id))
         query = query.order_by(OperationTask.created_at.desc())
         total = query.count()
         items = query.offset((page - 1) * page_size).limit(page_size).all()
@@ -108,6 +122,8 @@ class TaskService:
             Approval.resource_id == str(task.id), Approval.status == "pending",
         ).update({"status": "expired"}, synchronize_session=False)
         task.status = "cancelled"
+        if (task.input_params or {}).get('schedule'):
+            task.input_params = {**task.input_params, 'schedule': {**task.input_params['schedule'], 'enabled': False}}
         task.completed_at = datetime.now(timezone.utc)
         self.db.commit()
         self.db.refresh(task)
@@ -115,6 +131,8 @@ class TaskService:
 
     def retry_task(self, company_id: uuid.UUID, task_id: uuid.UUID) -> OperationTask:
         task = self.get_task(company_id, task_id)
+        if (task.input_params or {}).get('schedule'):
+            raise HTTPException(400, '请通过恢复定时计划操作，不能将计划模板作为单次任务重试')
         if task.status not in ("failed", "cancelled"):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

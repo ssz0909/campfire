@@ -60,6 +60,13 @@ def _extract_metadata(asset: Asset, db) -> None:
         from app.services import get_storage_service
         enrich_video_asset(asset, get_storage_service())
         db.commit()
+    elif asset.asset_type == 'audio':
+        from app.services.media_processing import inspect_audio
+        from app.services import get_storage_service
+        metadata = inspect_audio(get_storage_service().get_file(asset.file_key))
+        asset.duration_seconds = metadata['duration_seconds']
+        asset.codec = metadata['codec']
+        db.commit()
 
 
 def _extract_image_metadata(asset: Asset, db) -> None:

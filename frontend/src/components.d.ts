@@ -18,6 +18,7 @@ declare module 'vue' {
     DingdandaoLoginModal: typeof import('./components/DingdandaoLoginModal.vue')['default']
     HelloWorld: typeof import('./components/HelloWorld.vue')['default']
     LanguageToggle: typeof import('./components/common/LanguageToggle.vue')['default']
+    MusicPicker: typeof import('./components/video/MusicPicker.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     StatusBadge: typeof import('./components/common/StatusBadge.vue')['default']

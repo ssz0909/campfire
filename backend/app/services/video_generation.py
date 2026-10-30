@@ -65,7 +65,7 @@ def _compose_selected_images(db, project, selected_ids):
     planned = bool(project.storyboard and project.storyboard[0].get('planning_version') == 2)
     if planned:
         from app.services.video_director import validate_plan
-        plan = validate_plan(project.storyboard, [{'id':str(v)} for v in selected_ids], project.target_duration_seconds)
+        plan = validate_plan(project.storyboard, [{'id':str(v)} for v in selected_ids], project.target_duration_seconds, allow_legacy_reuse=True)
         duration = project.target_duration_seconds
     else:
         duration = max(float(project.target_duration_seconds or 5), 5 * len(selected_ids))
@@ -77,9 +77,10 @@ def _compose_selected_images(db, project, selected_ids):
         description = analysis.get('visual_description') or asset.source_description or asset.name
         clip_duration = shot['duration_seconds']
         if planned:
-            prompt = (f"{shot['generation_prompt']}\n当前镜头可见事实：{description}。"
+            from app.services.video_director import shot_generation_prompt
+            prompt = (f"{shot_generation_prompt(plan, number-1)}\n当前镜头可见事实：{description}。"
                       f"景别：{shot['framing']}；运镜：{shot['camera_movement']}。"
-                      '只生成当前一个连续镜头，不切场景，不生成字幕、标志或文字，不添加参考图外的人物与设施；'
+                      '只生成当前参考场景的动态镜头，可执行脚本指定的淡入淡出与衔接动作，不凭空切换到其他场景；不生成字幕、标志或文字，不添加参考图外的人物与设施；'
                       '保持建筑直线与主体结构，避免闪烁、扭曲。动作从片段起始即自然展开。')
         else:
             prompt = (f'{project.script or project.marketing_goal or project.title}\n'
@@ -88,7 +89,7 @@ def _compose_selected_images(db, project, selected_ids):
         request = VideoGenerationRequest(prompt=prompt, duration_seconds=5 if planned else clip_duration,
             aspect_ratio=project.aspect_ratio, style=project.video_style,
             reference_image_url=reference_url(db, project, asset_id, shot=shot) if planned else reference_url(db, project, asset_id),
-            resolution=settings.VIDEO_RESOLUTION, audio=settings.VIDEO_AUDIO)
+            resolution=settings.VIDEO_RESOLUTION, audio=False if project.music_asset_id else settings.VIDEO_AUDIO)
         clip, task = _generate_clip(db, project, client, request, shot_number=number)
         clips.append(clip)
         shots.append({**shot, 'shot_number':number, 'visual_description':shot.get('visual_description') or description,
@@ -98,6 +99,8 @@ def _compose_selected_images(db, project, selected_ids):
         db.commit()
     project.project_status = 'compositing'; db.commit()
     content = assemble_model_clips(clips, project.aspect_ratio, [s['duration_seconds'] for s in plan] if planned else clip_duration)
+    from app.services.video_music import apply_music
+    content = apply_music(db,project,content,storage)
     key = f'{project.company_id}/generated/{uuid.uuid4()}.mp4'
     asset = Asset(company_id=project.company_id, uploaded_by=project.created_by, name=project.title,
         original_filename='generated-hotel-video.mp4', file_key=key,
@@ -218,7 +221,7 @@ def _generate_clip(db, project, client, request, shot_number=None):
     from app.models.cost import CostRecord
     if result.cost_cents is not None and not db.query(CostRecord).filter_by(video_project_id=project.id, provider_request_id=result.provider_task_id).first():
         db.add(CostRecord(company_id=project.company_id, video_project_id=project.id,
-            provider='video_relay', model_name=settings.VIDEO_MODEL, record_type='video_generation',
+            provider='video_relay', model_name=client.model, record_type='video_generation',
             quantity=float(request.duration_seconds), unit='seconds',
             unit_cost_cents=float(result.cost_cents) / max(float(request.duration_seconds), 1),
             total_cost_cents=float(result.cost_cents), is_estimate=False,
@@ -271,10 +274,12 @@ def run(project_id):
                    '使用首帧参考图的酒店环境，添加自然镜头运动、人物或环境动态；只使用参考素材中可见的酒店事实。')
         request = VideoGenerationRequest(prompt=prompt,duration_seconds=project.target_duration_seconds or 5,
             aspect_ratio=project.aspect_ratio,style=project.video_style,
-            reference_image_url=reference_url(db, project), resolution=settings.VIDEO_RESOLUTION, audio=settings.VIDEO_AUDIO)
+            reference_image_url=reference_url(db, project), resolution=settings.VIDEO_RESOLUTION, audio=False if project.music_asset_id else settings.VIDEO_AUDIO)
         content, task = _generate_clip(db, project, client, request)
         from app.services.media_processing import assemble_model_clips
         content = assemble_model_clips([content], project.aspect_ratio, project.target_duration_seconds or 5)
+        from app.services.video_music import apply_music
+        content = apply_music(db,project,content,StorageService(settings.STORAGE_BACKEND))
         size = len(content)
         key = f'{project.company_id}/generated/{uuid.uuid4()}.mp4'
         url = StorageService(settings.STORAGE_BACKEND).upload_file(content,key,'video/mp4')

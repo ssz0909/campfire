@@ -41,6 +41,10 @@ class VideoProject(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
     reference_asset_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("assets.id"), nullable=True
     )
+    music_asset_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('assets.id'), nullable=True
+    )
+    music_volume: Mapped[float] = mapped_column(Numeric(4, 3), default=0.25, server_default='0.25', nullable=False)
     selected_asset_ids: Mapped[list | None] = mapped_column("selected_asset_ids", nullable=True)
     reference_analysis: Mapped[dict | None] = mapped_column(
         "reference_analysis", nullable=True

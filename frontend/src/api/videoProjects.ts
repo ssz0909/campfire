@@ -2,6 +2,10 @@ import apiClient from './client'
 import type { VideoProject } from '@/types/videoProject'
 
 export const videoProjectsApi = {
+  updateMusic(companyId:string, projectId:string, data:{music_asset_id:string|null;music_volume:number}, draft=false):Promise<{data:VideoProject}> {
+    const url=`/companies/${companyId}/video-projects/${projectId}`
+    return (draft?apiClient.put(url,data):apiClient.post(url+'/music',data,{timeout:180000})).then(normalize)
+  },
   create(companyId: string, data: Partial<VideoProject> & {selected_asset_ids?:string[]}): Promise<{ data: VideoProject }> {
     return apiClient.post(`/companies/${companyId}/video-projects`, data)
   },

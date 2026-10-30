@@ -129,6 +129,7 @@
             :row-key="(r) => r.id"
           />
         </section>
+        <ModelSettings v-if="activeTab === 'models'" />
       </main>
     </div>
 
@@ -184,6 +185,7 @@ import {
   BarChartOutline, PeopleOutline, BusinessOutline,
   AddOutline, SearchOutline,
 } from '@vicons/ionicons5'
+import ModelSettings from './ModelSettings.vue'
 import AppBadge from '@/components/common/AppBadge.vue'
 import { useAuthStore } from '@/stores/auth'
 import apiClient from '@/api/client'
@@ -230,8 +232,9 @@ interface AdminCompany {
 const router = useRouter()
 const authStore = useAuthStore()
 
-const activeTab = ref<'overview' | 'users' | 'companies'>('overview')
+const activeTab = ref<'overview' | 'users' | 'companies' | 'models'>('overview')
 const tabs = [
+  { key: 'models' as const, label: '大模型配置', icon: BarChartOutline },
   { key: 'overview' as const, label: '概览', icon: BarChartOutline },
   { key: 'users' as const, label: '用户', icon: PeopleOutline },
   { key: 'companies' as const, label: '企业', icon: BusinessOutline },
@@ -599,7 +602,7 @@ function handleLogout() {
   width: 100%;
 }
 
-.admin-nav-item__icon { font-size: 16px; flex-shrink: 0; }
+.admin-nav-item__icon { width: 18px; height: 18px; flex: 0 0 18px; display: block; }
 
 .admin-nav-item:hover { background: var(--surface-sunken); color: var(--text-primary); }
 .admin-nav-item--active { background: var(--color-brand-50); color: var(--color-brand-600); }

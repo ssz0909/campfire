@@ -27,6 +27,21 @@ def test_structured_script_does_not_bypass_length_or_storyboard_validation():
         Draft.model_validate({'sections':[{'title':'交付','content':'脚本'}],
             'video_script':{'body':'泳池'}, 'video_storyboard':[{'source_asset_id':'invalid'}]})
 
+def test_nested_section_deliverables_are_extracted_and_validated():
+    from app.agent.workflows.llm_draft import Draft
+    from app.services.video_director import fallback_plan
+    plan=fallback_plan([{'id':f'hotel-{i}','name':'酒店'} for i in range(6)],15)
+    draft=Draft.model_validate({'sections':[
+        {'title':'脚本','content':{'video_script':'真实酒店体验'}},
+        {'title':'分镜','content':{'video_storyboard':plan}},
+        {'title':'文案','content':{'publish_title':'酒店','publish_description':'咨询入住'}},
+    ]})
+    assert len(draft.video_storyboard)==6
+    assert draft.video_script=='真实酒店体验'
+    assert isinstance(draft.sections[1].content,str)
+    with pytest.raises(ValueError,match='冲突'):
+        Draft.model_validate({'video_script':'另一个版本','sections':[{'title':'脚本','content':{'video_script':'原版本'}}]})
+
 def setup_parent(db):
     user = create_test_user(db)
     company = create_test_company(db, user)
@@ -56,10 +71,20 @@ def test_video_handoff_reuses_project(db):
     from tests.test_asset_intelligence import make_asset
     from app.models.company import Company
     from app.models.user import User
-    make_asset(db,db.get(Company,parent.company_id),db.get(User,parent.created_by),'酒店环境','landscape',[],'山景')
+    for image_index in range(12):
+        make_asset(db,db.get(Company,parent.company_id),db.get(User,parent.created_by),f'酒店环境{image_index}','landscape',[],'山景')
     a=create_video_handoff(db,parent);db.commit()
     b=create_video_handoff(db,parent)
     assert a.id==b.id
+
+def test_legacy_llm_script_cannot_silently_loop_assets(db):
+    from fastapi import HTTPException
+    parent=setup_parent(db)
+    parent.output={'mode':'llm','video_script':'旧版三图脚本'}
+    with pytest.raises(HTTPException,match='') as exc:
+        create_video_handoff(db,parent)
+    assert exc.value.status_code==422
+    assert '缺少结构化分镜' in exc.value.detail
 
 def test_llm_generates_validated_draft_and_filters_cyclic_actions(db,monkeypatch):
     parent=setup_parent(db)
@@ -109,7 +134,8 @@ def test_full_approved_chain_creates_video_without_live_calls(client, db, monkey
     user=create_test_user(db,email='chain@example.com')
     company=create_test_company(db,user,slug='chain')
     from tests.test_asset_intelligence import make_asset
-    make_asset(db,company,user,'酒店环境','landscape',[],'酒店真实山景')
+    for image_index in range(12):
+        make_asset(db,company,user,f'酒店环境{image_index}','landscape',[],'酒店真实山景')
     monkeypatch.setattr('app.services.video_generation.reference_url',lambda *a,**k:'https://test.invalid/reference')
     monkeypatch.setattr(settings,'TASK_EXECUTION_MODE','inline')
     for k,v in [('LLM_BASE_URL','https://relay.test/v1'),('LLM_MODEL','test-model'),('LLM_API_KEY','test')]:

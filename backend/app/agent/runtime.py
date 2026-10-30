@@ -73,9 +73,9 @@ class AgentRuntime:
             if task.status == 'cancelled':
                 return {'status':'cancelled'}
             task.status = "failed"
-            task.error_message = str(exc)
+            task.error_message = str(exc).strip() or f'任务执行异常（{type(exc).__name__}），请检查服务日志后重试'
             task.completed_at = datetime.now(timezone.utc)
-            self._append_log(task, "error", f"任务失败：{exc}")
+            self._append_log(task, "error", f"任务失败：{task.error_message}")
         self.db.commit()
         return {"status": task.status, "output": task.output}
 

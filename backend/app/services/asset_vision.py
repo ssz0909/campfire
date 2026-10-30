@@ -6,14 +6,15 @@ import json
 from datetime import datetime, timezone
 
 from PIL import Image
-from app.config import settings
+from app.services.model_settings import get_llm_settings
 from app.providers.llm.openai_provider import OpenAIProvider
 
 CATEGORIES = ('exterior','lobby','guest_room','bathroom','restaurant','breakfast','amenities','pool','meeting_room','staff','landscape','other')
 
 
 def analyze_image(content: bytes, mime_type: str) -> dict:
-    if not all((settings.LLM_BASE_URL,settings.LLM_MODEL,settings.LLM_API_KEY)):
+    config = get_llm_settings()
+    if not all(config.values()):
         return {'status':'skipped','detail':'未配置完整的视觉模型参数，已保留原素材'}
     image=Image.open(io.BytesIO(content)).convert('RGB')
     image.thumbnail((1024,1024))
@@ -24,7 +25,7 @@ def analyze_image(content: bytes, mime_type: str) -> dict:
         {'role':'user','content':[{'type':'text','text':'识别这张酒店运营素材，供按主题检索和视频选材。'},
                                   {'type':'image_url','image_url':{'url':data,'detail':'low'}}]},
     ]
-    response=asyncio.run(OpenAIProvider().complete(messages,max_tokens=500,temperature=0.1))
+    response=asyncio.run(OpenAIProvider(config=config).complete(messages,max_tokens=500,temperature=0.1))
     raw=response['content'].strip()
     if raw.startswith('```'):
         raw=raw.split('\n',1)[-1].strip()

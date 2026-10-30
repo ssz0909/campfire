@@ -3,8 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
-
 from app.config import settings
+
+from app.services.model_settings import get_llm_settings
 from app.providers.llm.base import LLMProvider
 
 # Cost per 1M tokens in cents (approximate as of mid-2024)
@@ -19,12 +20,13 @@ _PRICING: dict[str, dict[str, float]] = {
 class OpenAIProvider(LLMProvider):
     """OpenAI chat completion provider via httpx."""
 
-    def __init__(self, api_key: str | None = None) -> None:
-        self._api_key = api_key or settings.LLM_API_KEY
+    def __init__(self, api_key: str | None = None, *, config: dict[str, str] | None = None) -> None:
+        config = get_llm_settings() if config is None else config
+        self._api_key = api_key or config["api_key"]
         if not self._api_key:
             raise ValueError("LLM_API_KEY is not configured")
-        self._base_url = settings.LLM_BASE_URL.strip().rstrip("/")
-        self._model = settings.LLM_MODEL.strip()
+        self._base_url = config["base_url"].strip().rstrip("/")
+        self._model = config["model"].strip()
         if not self._base_url:
             raise ValueError("LLM_BASE_URL is not configured")
 
@@ -50,12 +52,17 @@ class OpenAIProvider(LLMProvider):
             "temperature": temperature,
             **kwargs,
         }
-        async with httpx.AsyncClient(timeout=120) as client:
-            response = await client.post(
-                f"{self._base_url}/chat/completions",
-                headers=headers,
-                json=payload,
-            )
+        async with httpx.AsyncClient(timeout=httpx.Timeout(settings.LLM_TIMEOUT_SECONDS, connect=20)) as client:
+            try:
+                response = await client.post(
+                    f"{self._base_url}/chat/completions",
+                    headers=headers,
+                    json=payload,
+                )
+            except httpx.TimeoutException as exc:
+                raise ValueError(f'大模型请求超时（等待上限{settings.LLM_TIMEOUT_SECONDS:g}秒），未取得本次交付结果；请核对中转服务后重新执行任务。') from exc
+            except httpx.RequestError as exc:
+                raise ValueError('大模型服务连接异常，未取得交付结果；请检查中转服务后重新执行任务') from exc
             if response.is_error:
                 raise ValueError(f'大模型接口 HTTP {response.status_code}，请检查 LLM_BASE_URL、LLM_MODEL 和 LLM_API_KEY')
             data = response.json()

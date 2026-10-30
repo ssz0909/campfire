@@ -22,6 +22,14 @@ from app.services.company_service import CompanyService
 router = APIRouter()
 
 from app.services.publish_location import PublishLocationSettings, resolve_location
+from app.schemas.video_project import DefaultMusicSettings
+
+
+@router.put('/{company_id}/default-video-music', response_model=CompanyResponse)
+def set_video_music(company_id: uuid.UUID, data: DefaultMusicSettings,
+    _: User = Depends(require_permission(Permission.COMPANY_EDIT)), db: Session = Depends(get_db)):
+    from app.services.video_music import set_default_music
+    return set_default_music(db,company_id,data)
 
 @router.put('/{company_id}/publish-location', response_model=CompanyResponse)
 def set_publish_location(company_id: uuid.UUID, data: PublishLocationSettings,

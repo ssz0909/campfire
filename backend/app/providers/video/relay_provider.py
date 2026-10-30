@@ -2,6 +2,7 @@ from urllib.parse import quote
 import re
 import httpx
 from app.config import settings
+from app.services.model_settings import get_video_settings
 from app.providers.video.base import VideoProvider, VideoGenerationResult
 
 class RelayVideoRequestError(ValueError):
@@ -11,11 +12,13 @@ class RelayVideoRequestError(ValueError):
 
 class RelayVideoProvider(VideoProvider):
     def __init__(self):
-        self.url = settings.VIDEO_BASE_URL.strip().rstrip('/')
-        self.model = settings.VIDEO_MODEL.strip()
-        self.key = settings.VIDEO_API_KEY.strip()
+        config = get_video_settings()
+        self.url = config['base_url'].strip().rstrip('/')
+        self.model = config['model'].strip()
+        self.key = config['api_key'].strip()
+        self.status_url = settings.VIDEO_STATUS_URL.strip()
         if not all((self.url, self.model, self.key)):
-            raise ValueError('请配置 VIDEO_BASE_URL、VIDEO_MODEL、VIDEO_API_KEY')
+            raise ValueError('请在管理后台配置视频模型，或设置 VIDEO_BASE_URL、VIDEO_MODEL、VIDEO_API_KEY')
         if not self.url.endswith('/video/generations'):
             self.url += '/video/generations'
 
@@ -90,7 +93,7 @@ class RelayVideoProvider(VideoProvider):
         }))
 
     async def get_task_status(self, provider_task_id):
-        template = settings.VIDEO_STATUS_URL.strip() or self.url + '/{task_id}'
+        template = self.status_url or self.url + '/{task_id}'
         return self.parse(await self.request('GET',template.replace('{task_id}',quote(provider_task_id,safe=''))),provider_task_id)
 
     async def cancel_task(self, provider_task_id):

@@ -9,6 +9,7 @@ User=campfire
 Group=campfire
 WorkingDirectory=/opt/campfire/current/backend
 Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/campfire/current/backend
 Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/campfire/shared/browsers
 ExecStart=/opt/campfire/venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8018 --workers 1 --proxy-headers --forwarded-allow-ips=127.0.0.1
 Restart=on-failure

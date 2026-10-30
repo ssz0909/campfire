@@ -16,6 +16,8 @@
 
 检查：`systemctl status campfire`、`journalctl -u campfire -n 100`、`curl https://campfire.dawoai.com/health`。重启：`systemctl restart campfire`。
 
+服务及维护脚本必须设置 `PYTHONPATH=/opt/campfire/current/backend`。虚拟环境中可能存在安装时的旧 `app` 包；仅切换工作目录无法保证位于 `/tmp` 的脚本导入当前源码。执行前通过 `inspect.getfile()` 检查关键工作流路径，禁止从 `site-packages/app` 重试任务。
+
 生产 `PUBLIC_BASE_URL` 必须是实际公网 HTTPS 后端地址，使视频模型能读取带签名的参考图；禁止将上传目录公开成无鉴权静态目录。
 
 远程服务器不显示用户本机 Chrome 窗口。平台发布页现提供公司权限隔离的云端登录画面，每 4 秒更新，支持扫码、点击、输入、拖动和刷新。截图接口禁止缓存；不返回 Cookie 或任意导航接口。收起画面不会关闭会话。必须由用户完成扫码，不能将浏览器启动当成已授权，平台登录及实际发布仍需真实账号验收。
