@@ -17,6 +17,7 @@
     <template v-else-if="task">
       <AppCard>
         <p>{{ task.output?.employee_name ?? '数字员工' }} · {{ taskLabels[task.status] }} <span v-if="!schedule">· {{ task.progress }}%</span></p>
+        <p class="hint">审批策略：{{ task.input_params?.auto_execute === true ? '全流程自动执行（含视频生成与发布）' : '人工审批' }}</p>
         <p class="hint">目标：{{ task.input_params?.goal ?? task.title }}</p>
         <p v-if="execution?.publish_accounts?.length" class="hint">发布账号：{{ execution.publish_accounts.map(row => row.label).join('、') }}</p>
         <p v-if="task.output?.mode_label" class="hint">{{ task.output.mode_label }} · {{ task.output.notice }}</p>
@@ -28,7 +29,9 @@
         <p v-if="task.status === 'scheduled' && schedule.next_run_at">下次执行：{{ new Date(schedule.next_run_at).toLocaleString() }}</p>
         <p v-if="schedule.last_run_at">最近调度：{{ new Date(schedule.last_run_at).toLocaleString() }}</p>
         <p v-if="schedule.last_error" class="error">{{ schedule.last_error }}</p>
-        <p class="hint">每轮独立记录，仍需按现有流程审核。停机期间错过的执行只补一次；暂停计划不影响已经启动的任务。</p>
+        <p class="hint">每轮独立记录，沿用计划当前的审批策略。停机期间错过的执行只补一次；暂停计划不影响已经启动的任务。</p>
+        <n-button :loading="busy" @click="toggleAutoExecute">{{ task.input_params?.auto_execute === true ? '后续轮次改为人工审批' : '后续轮次允许全流程自动执行' }}</n-button>
+        <p class="hint">开启后，后续轮次自动通过全部审批，付费生成视频并直接发布至所选账号。更改不影响已经创建的轮次。</p>
         <h2>最近执行记录</h2>
         <p v-if="!scheduleRuns.length" class="hint">尚未触发执行。</p>
         <div v-for="run in scheduleRuns" :key="run.id" class="loop-stage">
@@ -42,7 +45,7 @@
         <template v-if="!task.parent_task_id && task.status === 'completed'">
           <AccountPicker v-model="accountIds" :company-id="auth.currentCompanyId!" />
           <div class="actions"><n-button type="primary" :loading="busy" @click="continueExecution">{{ execution.enabled ? '继续 / 修复执行流程' : '启动执行闭环' }}</n-button></div>
-          <p class="hint">逐阶段审批后自动继续。视频脚本审批会调用视频模型并产生费用，真实发布需另行审核具体成片和文案。</p>
+          <p class="hint">按当前审批策略继续执行。开启全流程自动执行后，脚本与成片自动通过并发布；视频生成会产生费用。</p>
         </template>
         <div v-for="stage in execution.stages" :key="stage.kind + stage.id" class="loop-stage">
           <strong>{{ stage.title }}</strong> · {{ stageLabel(stage.status) }} {{ stage.platform === 'douyin' ? '抖音' : stage.platform === 'wechat_channels' ? '视频号' : '' }} {{ stage.account_label || '' }}
@@ -112,6 +115,9 @@ function toggleSchedule() { if (task.value) act(() => tasksApi.setScheduleEnable
 let targetsLoadedFor = ''
 const loopLabels: Record<string,string> = {completed:'已闭环',in_progress:'执行中',blocked:'待处理',waiting_approval:'待审批',cancelled:'已停止',pending_review:'待成片审核',published:'已发布',manual_required:'需人工确认',login_required:'需重新登录',rejected:'已退回'}
 function stageLabel(status: string) { return ({pending:'待执行',queued:'排队中',running:'执行中',completed:'阶段已完成',waiting_external:'等待外部结果',failed:'失败',cancelled:'已取消'} as Record<string,string>)[status] || loopLabels[status] || status }
+async function toggleAutoExecute() {
+  if (task.value) await act(() => tasksApi.setAutoExecute(auth.currentCompanyId!, task.value!.id, task.value!.input_params?.auto_execute !== true))
+}
 async function continueExecution() { if (task.value) await act(() => tasksApi.continueExecution(auth.currentCompanyId!, task.value!.id, [], accountIds.value)) }
 let timer: ReturnType<typeof setTimeout> | undefined
 let disposed = false
@@ -164,6 +170,7 @@ function createSchedule() {
   router.push({ path: '/tasks/new', query: { employee_id: task.value?.digital_employee_id,
     title: task.value?.title, goal: String(task.value?.input_params?.goal ?? ''), timing: 'daily',
     execution_loop: String(task.value?.input_params?.execution_loop ?? false),
+    auto_execute: String(task.value?.input_params?.auto_execute === true),
     account_ids: (task.value?.input_params?.publish_account_ids as string[] | undefined)?.join(',') ?? '' } })
 }
 function handoff(action: { role: string; title: string; goal: string }) {

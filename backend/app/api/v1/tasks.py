@@ -25,6 +25,23 @@ class ScheduleState(BaseModel):
     enabled: bool
 
 
+@router.put('/{company_id}/tasks/{tid}/auto-execute', response_model=TaskResponse)
+def set_auto_execute(company_id: uuid.UUID, tid: uuid.UUID, data: ScheduleState,
+    current_user: User = Depends(require_permission(Permission.TASK_EXECUTE)), db: Session = Depends(get_db)):
+    from fastapi import HTTPException
+    from app.services.auto_execution import require_authority
+    TaskService(db).get_task(company_id, tid)
+    task = db.query(OperationTask).filter_by(id=tid, company_id=company_id).with_for_update().populate_existing().one()
+    if not (task.input_params or {}).get('schedule') or task.status not in ('scheduled', 'paused'):
+        raise HTTPException(409, '请在新建任务时设置；已有定时计划可修改后续执行策略')
+    require_authority(db, company_id, current_user.id)
+    if data.enabled:
+        require_authority(db, company_id, task.created_by)
+    task.input_params = {**task.input_params, 'auto_execute': data.enabled}
+    db.commit(); db.refresh(task)
+    return task
+
+
 @router.put('/{company_id}/tasks/{tid}/schedule', response_model=TaskResponse)
 def set_schedule_state(company_id: uuid.UUID, tid: uuid.UUID, data: ScheduleState,
     _: User = Depends(require_permission(Permission.TASK_EXECUTE)), db: Session = Depends(get_db)):

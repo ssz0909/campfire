@@ -29,6 +29,7 @@ class TaskSchedule(BaseModel):
 
 
 class TaskCreate(BaseModel):
+    auto_execute: bool = False
     schedule: TaskSchedule | None = None
     title: str = Field(min_length=1, max_length=255)
     description: str | None = None

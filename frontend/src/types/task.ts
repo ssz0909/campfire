@@ -56,6 +56,7 @@ export interface OperationTask {
   updated_at: string
 }
 export interface CreateTaskRequest {
+  auto_execute?: boolean
   schedule?: TaskSchedule
   parent_task_id?: string
   digital_employee_id: string

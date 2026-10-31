@@ -37,6 +37,9 @@ class AgentRuntime:
             from app.services.execution_loop import enabled, assert_active
             if enabled(task):
                 assert_active(self.db, task)
+            from app.services.auto_execution import enabled as auto_enabled, require_authority
+            if auto_enabled(task):
+                require_authority(self.db, task.company_id, task.created_by)
             self._validate_budget(task)
             from app.agent.workflows.operations import OperationsWorkflow
             result = OperationsWorkflow().run(task, tenant_context, self.db, self)
@@ -66,7 +69,7 @@ class AgentRuntime:
             task.output = {**result, "approval_id": str(approval.id)}
             task.status = "waiting_approval"
             task.progress = 90
-            self._append_log(task, "info", "草稿已生成，等待人工审批；未执行外部发布")
+            self._append_log(task, "info", "草稿已生成，按任务设置自动通过" if (task.input_params or {}).get("auto_execute") is True else "草稿已生成，等待人工审批；未执行外部发布")
         except Exception as exc:
             self.db.rollback()
             self.db.refresh(task)
@@ -77,6 +80,15 @@ class AgentRuntime:
             task.completed_at = datetime.now(timezone.utc)
             self._append_log(task, "error", f"任务失败：{task.error_message}")
         self.db.commit()
+        # Review uses its own durable transaction before dispatching descendants.
+        from app.services.auto_execution import approve_task
+        try:
+            approve_task(self.db, task)
+        except Exception as exc:
+            self.db.rollback()
+            self.db.refresh(task)
+            self._append_log(task, "error", f"自动执行受阻：{getattr(exc, 'detail', None) or str(exc)}")
+            self.db.commit()
         return {"status": task.status, "output": task.output}
 
     def _load_task(

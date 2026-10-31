@@ -71,9 +71,10 @@ def actions_for(task, result):
 
 def child_params(parent):
     params = parent.input_params or {}
+    automation = {'auto_execute': params.get('auto_execute') is True}
     if not enabled(parent):
-        return {}
-    return {'execution_loop': True, 'execution_root_id': params.get('execution_root_id', str(parent.id)),
+        return automation
+    return {**automation, 'execution_loop': True, 'execution_root_id': params.get('execution_root_id', str(parent.id)),
             'execution_goal': params.get('execution_goal', params.get('goal', parent.title)),
             'publish_platforms': params.get('publish_platforms', []),
             **({'publish_account_ids': params['publish_account_ids']} if 'publish_account_ids' in params else {})}

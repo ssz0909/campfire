@@ -309,6 +309,18 @@ def run(project_id):
                 task.error_message = detail
             db.commit()
     finally:
+        # Runs after final assembly, thumbnail and music for every production path.
+        if project and project.project_status == 'pending_review':
+            try:
+                from app.services.auto_execution import approve_video
+                approve_video(db, project)
+            except Exception as exc:
+                db.rollback()
+                db.refresh(project)
+                project.quality_check_result = {**(project.quality_check_result or {}),
+                    'automation_error': str(getattr(exc, 'detail', None) or exc)}
+                db.commit()
+                logger.exception('Automatic video review blocked for project %s', project_id)
         db.close()
         if lease is not None:
             from sqlalchemy import text

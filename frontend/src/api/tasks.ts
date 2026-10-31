@@ -6,6 +6,10 @@ function normalize(task: OperationTask): OperationTask {
 }
 export interface ExecutionSnapshot { enabled: boolean; root_id: string; status: string; publish_platforms: string[]; publish_account_ids?: string[]; publish_accounts?: {id: string; label: string}[]; next_step: string; notice: string; stages: {kind: string; id: string; title: string; status: string; error?: string; platform?: string; account_label?: string; feedback_due_at?: string; feedback_state?: string; approval_id?: string}[] }
 export const tasksApi = {
+  async setAutoExecute(companyId: string, taskId: string, enabled: boolean) {
+    const res = await apiClient.put<OperationTask>(`/companies/${companyId}/tasks/${taskId}/auto-execute`, { enabled })
+    return { data: normalize(res.data) }
+  },
   async setScheduleEnabled(companyId: string, taskId: string, enabled: boolean) {
     const res = await apiClient.put<OperationTask>(`/companies/${companyId}/tasks/${taskId}/schedule`, { enabled })
     return { data: normalize(res.data) }

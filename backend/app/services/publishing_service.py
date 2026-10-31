@@ -248,6 +248,9 @@ def web_publish(db, company_id, job_id):
         from app.services.execution_loop import assert_active
         source = db.query(OperationTask).filter_by(id=job.task_id, company_id=company_id).first()
         if not source: raise HTTPException(409, '来源任务不存在')
+        from app.services.auto_execution import enabled as auto_enabled, require_authority
+        if auto_enabled(source):
+            require_authority(db, company_id, source.created_by)
         assert_active(db, source)
         if job.status in ('rejected', 'waiting_approval'):
             raise HTTPException(409, '发布任务尚未获准执行')
@@ -345,6 +348,7 @@ def web_metrics(db, company_id, job_id):
                     digital_employee_id=analyst.id,task_type='business_analysis',title='平台数据复盘与内容优化',
                     input_params={'goal':'根据最新平台数据提出后续内容优化方案，说明账号数据与作品归因的边界',
                                   'feedback_publish_job_id':str(job.id), 'auto_handoff':False,
+                                  'auto_execute':bool(source and (source.input_params or {}).get('auto_execute') is True),
                                   **({'execution_loop':True, 'execution_root_id':job.content_snapshot['execution_root_id']} if is_loop else {})},status='pending',progress=0,execution_log=[])
                 db.add(feedback_task);db.flush()
                 job.metrics = {**job.metrics, 'feedback_task_id':str(feedback_task.id)}
