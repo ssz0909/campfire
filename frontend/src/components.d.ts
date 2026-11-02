@@ -24,5 +24,6 @@ declare module 'vue' {
     RouterView: typeof import('vue-router')['RouterView']
     StatusBadge: typeof import('./components/common/StatusBadge.vue')['default']
     UploadZone: typeof import('./components/common/UploadZone.vue')['default']
+    WorkMetrics: typeof import('./components/publishing/WorkMetrics.vue')['default']
   }
 }

@@ -1203,3 +1203,82 @@ def login_view(company_id, platform, action=None):
     viewport = page.viewport_size or {'width': 1440, 'height': 960}
     return {'image': 'data:image/jpeg;base64,' + base64.b64encode(screenshot).decode(),
             'width': viewport['width'], 'height': viewport['height'], 'input_focused': input_focused, 'input_field': input_field}
+
+
+@browser_operation
+def read_work_metrics(company_id, platform, targets, expected_account_id=None):
+    """Read creator lists in a separate tab; never touch an upload/editor tab."""
+    from app.connectors.work_metrics import extract_records, match_records
+    _ensure_open(company_id, platform)
+    session = _get_session(company_id, platform)
+    if not session:
+        return {'status':'login_required','items':{},'message':'平台登录已失效，请重新登录'}
+    try:
+        session['page'].wait_for_function("() => /作品管理|内容管理|发布视频|发布作品|数据中心|创作者中心|视频号ID|扫码登录|验证码登录/.test(document.body?.innerText || '')", timeout=15000)
+    except Exception: pass
+    state = session_status(company_id, platform)
+    for _ in range(20):
+        if not state.get('login_required'): break
+        if any(label in _page_text(session['page']) for label in ('扫码登录','验证码登录')): break
+        session['page'].wait_for_timeout(500)
+        state = session_status(company_id, platform)
+    if state.get('login_required') or (expected_account_id and state.get('account_fingerprint') != expected_account_id):
+        return {'status':'login_required','items':{},'message':'登录已失效或账号身份不一致，请重新登录对应账号'}
+    page = session['context'].new_page()
+    records, seen_pages = [], set()
+    complete = False
+    def observe(response):
+        nonlocal complete
+        parsed = urlparse(response.url)
+        allowed = (platform == 'wechat_channels' and parsed.hostname == 'channels.weixin.qq.com' and
+                   parsed.path.endswith('/post/post_list')) or (
+                   platform == 'douyin' and parsed.hostname == 'creator.douyin.com' and
+                   parsed.path.rstrip('/') in ('/web/api/creator/item/list', '/janus/douyin/creator/pc/work_list'))
+        if not allowed or response.status != 200: return
+        try:
+            payload = response.json()
+            if payload.get('status_code', 0) != 0 or payload.get('errCode', 0) != 0: return
+            records.extend(extract_records(payload, platform))
+            if parsed.path.rstrip('/') == '/janus/douyin/creator/pc/work_list' and 'has_more' in payload and payload['has_more'] in (False, 0): complete = True
+            data = payload.get('data') or {}
+            if isinstance(data, dict) and data.get('hasMore') is False: complete = True
+        except Exception: pass
+    page.on('response', observe)
+    try:
+        page.goto(PLATFORM_URLS[platform], wait_until='domcontentloaded', timeout=30000)
+        page.wait_for_timeout(2500)
+        labels = ('作品管理','内容管理') if platform == 'douyin' else ('内容管理','视频')
+        for label in labels:
+            links = page.get_by_text(label, exact=True)
+            visible = [links.nth(i) for i in range(links.count()) if links.nth(i).is_visible()]
+            if len(visible) == 1:
+                visible[0].click(timeout=10000); page.wait_for_timeout(1800)
+        for _ in range(20):
+            page.wait_for_timeout(800)
+            body = _page_text(page, timeout=8000)
+            fingerprint = hash(body)
+            if fingerprint in seen_pages: break
+            seen_pages.add(fingerprint)
+            next_buttons = page.locator('[aria-label="下一页"]:visible, [title="下一页"]:visible, .ant-pagination-next:visible, .semi-page-next:visible, .el-pagination .btn-next:visible')
+            if next_buttons.count() == 0:
+                exact = page.get_by_text('下一页', exact=True)
+                visible = [exact.nth(i) for i in range(exact.count()) if exact.nth(i).is_visible()]
+                button = visible[0] if len(visible) == 1 else None
+            else: button = next_buttons.first if next_buttons.count() == 1 else None
+            if button is None:
+                # Without pagination evidence title-only linking is unsafe.
+                break
+            disabled = button.is_disabled() or button.get_attribute('aria-disabled') == 'true' or 'disabled' in (button.get_attribute('class') or '')
+            if disabled:
+                complete = True; break
+            button.click(timeout=10000); page.wait_for_timeout(1500)
+        if '/login' in urlparse(page.url).path or any(label in _page_text(page) for label in ('扫码登录', '验证码登录')):
+            return {'status':'login_required','items':{},'message':'平台会话已过期，请重新登录对应账号'}
+        items = match_records(targets, records, complete)
+        return {'status':'synced' if items else 'unmatched','items':items,
+            'message':None if len(items)==len(targets) else '仅同步明确匹配的作品；未匹配可能因平台分页、发布时间或作品标识缺失，请在云端作品管理核对。'}
+    except Exception:
+        return {'status':'failed','items':{},'message':'作品数据页面加载失败，请检查平台登录或稍后重试'}
+    finally:
+        page.remove_listener('response', observe)
+        page.close()

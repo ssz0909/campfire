@@ -185,6 +185,8 @@ def tick():
                 _dispatch_scheduled_tasks(db)
                 dispatch_queued_publications(db)
                 collect_due(db)
+                from app.services.work_metrics import sync_due
+                sync_due(db)
         finally:
             if locked:
                 connection.execute(text('SELECT pg_advisory_unlock(727431921)'))

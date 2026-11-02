@@ -304,6 +304,8 @@ def web_publish(db, company_id, job_id):
     except Exception:
         result = {'status':'manual_required','message':'平台执行结果不确定，请核对发布后台后再操作，避免重复发布'}
     job.status = result["status"]; job.provider_url = result.get("provider_url"); job.provider_post_id = result.get("provider_post_id"); job.metrics = result.get("metrics"); job.error_message = result.get("message")
+    if job.status == 'published':
+        job.metrics = {**(job.metrics or {}), 'published_at':datetime.now(timezone.utc).isoformat()}
     if job.status == 'published' and (job.content_snapshot or {}).get('execution_root_id'):
         from datetime import timedelta
         job.metrics = {**(job.metrics or {}), 'feedback_due_at': (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat(), 'feedback_attempts': 0}

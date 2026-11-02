@@ -19,10 +19,11 @@
       </template>
     </AppPageHeader>
 
+    <p v-if="statsError" role="alert">{{ statsError }}</p>
     <!-- Stats row -->
     <div class="stats-row">
       <template v-if="statsLoading">
-        <AppCard v-for="i in 4" :key="i">
+        <AppCard v-for="i in 6" :key="i">
           <AppLoader variant="stat" />
         </AppCard>
       </template>
@@ -35,6 +36,7 @@
       </template>
     </div>
 
+    <WorkMetrics v-if="companyId" :company-id="companyId" style="margin-bottom:24px" />
     <div class="dashboard-grid">
       <!-- Recent tasks -->
       <AppCard class="dashboard-grid__main">
@@ -175,6 +177,7 @@ import { useAuthStore } from '@/stores/auth'
 import { tasksApi } from '@/api/tasks'
 import { approvalsApi } from '@/api/approvals'
 import { digitalEmployeesApi } from '@/api/digitalEmployees'
+import WorkMetrics from '@/components/publishing/WorkMetrics.vue'
 import { analyticsApi } from '@/api/analytics'
 import type { OperationTask } from '@/types/task'
 import type { ApprovalRequest } from '@/types/approval'
@@ -187,6 +190,7 @@ const authStore = useAuthStore()
 const companyId = computed(() => authStore.currentCompanyId!)
 
 const statsLoading = ref(true)
+const statsError = ref('')
 const tasksLoading = ref(true)
 const approvalsLoading = ref(true)
 const employeesLoading = ref(true)
@@ -197,22 +201,24 @@ const pendingApprovals = ref<ApprovalRequest[]>([])
 const employees = ref<DigitalEmployee[]>([])
 
 const stats = computed(() => [
+  { label: '累计任务', value: overviewStats.value?.total_tasks ?? '—' },
+  { label: '累计完成', value: overviewStats.value?.completed_tasks ?? '—' },
   {
     label: 'Active Tasks',
-    value: overviewStats.value?.active_tasks ?? 0,
+    value: overviewStats.value?.active_tasks ?? '—',
   },
   {
     label: 'Pending Approvals',
-    value: overviewStats.value?.pending_approvals ?? 0,
+    value: overviewStats.value?.pending_approvals ?? '—',
     status: (overviewStats.value?.pending_approvals ?? 0) > 0 ? 'awaiting_approval' : undefined,
   },
   {
     label: 'Videos This Month',
-    value: overviewStats.value?.videos_this_month ?? 0,
+    value: overviewStats.value?.videos_this_month ?? '—',
   },
   {
     label: 'Cost This Month',
-    value: `$${(overviewStats.value?.total_cost_this_month_usd ?? 0).toFixed(2)}`,
+    value: overviewStats.value ? `$${overviewStats.value.total_cost_this_month_usd.toFixed(2)}` : '—',
   },
 ])
 
@@ -254,7 +260,7 @@ async function loadStats() {
     const res = await analyticsApi.overview(companyId.value)
     overviewStats.value = res.data
   } catch {
-    // use defaults
+    statsError.value = '统计加载失败，请刷新重试；未获取到的数据不会显示为 0。'
   } finally {
     statsLoading.value = false
   }
@@ -297,7 +303,7 @@ async function loadEmployees() {
 <style scoped>
 .stats-row {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: var(--space-4);
   margin-bottom: var(--space-6);
 }

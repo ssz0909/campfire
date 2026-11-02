@@ -2,6 +2,7 @@
   <div>
     <AppPageHeader :title="t('Analytics')" :subtitle="t('Operational metrics and insights')" />
 
+    <WorkMetrics v-if="companyId" :company-id="companyId" style="margin-bottom:24px" />
     <div class="analytics-grid">
       <!-- Overview stats -->
       <div class="stats-row">
@@ -152,6 +153,7 @@ import AppCard from '@/components/common/AppCard.vue'
 import AppEmpty from '@/components/common/AppEmpty.vue'
 import AppLoader from '@/components/common/AppLoader.vue'
 import { useAuthStore } from '@/stores/auth'
+import WorkMetrics from '@/components/publishing/WorkMetrics.vue'
 import { analyticsApi } from '@/api/analytics'
 import { formatDateTime, formatMoney, formatPercent } from '@/utils/format'
 import type { OrderMetrics, ContentMetrics } from '@/types/analytics'

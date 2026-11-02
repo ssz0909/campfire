@@ -5,6 +5,9 @@ export interface OverviewStats {
   total_cost_this_month_usd: number
   active_employees: number
   tasks_completed_today: number
+  total_tasks: number
+  completed_tasks: number
+  timezone: string
 }
 
 export type OrderAnalyticsStatus = 'OK' | 'NO_DATA' | 'NOT_CONNECTED'
@@ -45,4 +48,18 @@ export interface ContentMetrics {
   images_generated: number
   words_generated: number
   period: string
+}
+
+export interface WorkMetricRow {
+ job_id:string; task_id:string|null; task_title:string|null; video_project_id:string; title:string
+ platform:string; account_label:string; provider_post_id:string|null; published_at:string
+ views:number|null;likes:number|null;comments:number|null;shares:number|null
+ captured_at:string|null;sync_status:string;sync_message:string|null;duplicate:boolean
+}
+export interface WorkMetricsSummary {
+ items:WorkMetricRow[];total:number;published_works:number;synced_works:number;can_sync:boolean
+ totals:Record<'views'|'likes'|'comments'|'shares',number|null>
+ platforms:{platform:string;published:number;synced:number;views:number|null}[]
+ accounts:{account_id:string;label:string;status?:string;message?:string;completed_at?:string}[]
+ note:string
 }

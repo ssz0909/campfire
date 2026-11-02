@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime, timezone
+from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -18,6 +19,24 @@ from app.models.video_project import VideoProject
 from app.models.publishing import PublishJob
 
 router = APIRouter()
+
+
+@router.get('/{company_id}/analytics/works')
+def analytics_works(company_id: uuid.UUID, page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100), platform: str | None = Query(None, pattern='^(douyin|wechat_channels)$'),
+    task_id: uuid.UUID | None = None,
+    current_user: User = Depends(require_permission(Permission.ANALYTICS_VIEW)), db: Session = Depends(get_db)):
+    from app.services.work_metrics import summary
+    return summary(db, company_id, page, page_size, platform, task_id, current_user.id)
+
+
+@router.post('/{company_id}/analytics/works/sync', status_code=202)
+def sync_work_metrics(company_id: uuid.UUID, background_tasks: BackgroundTasks,
+    _: User = Depends(require_permission(Permission.PUBLISH_CREATE)), db: Session = Depends(get_db)):
+    from app.services.work_metrics import request_sync, run_sync
+    accounts = request_sync(db, company_id)
+    if accounts: background_tasks.add_task(run_sync, company_id)
+    return {'queued_accounts':len(accounts), 'message':'已提交采集，请稍后刷新；同账号五分钟内不重复采集。'}
 
 
 @router.get("/{company_id}/analytics/overview")
@@ -65,7 +84,27 @@ def analytics_overview(
         .scalar()
         or 0
     )
+    from app.models.approval import Approval
+    local_now = datetime.now(ZoneInfo('Asia/Shanghai'))
+    today_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    month_start = local_now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    now = local_now.astimezone(timezone.utc)
+    monthly_cost = db.query(func.sum(CostRecord.total_cost_cents)).filter(
+        CostRecord.company_id == company_id, CostRecord.created_at >= month_start, CostRecord.created_at <= now).scalar() or 0
     return {
+        'active_tasks': db.query(func.count(OperationTask.id)).filter(
+            OperationTask.company_id == company_id, OperationTask.status.in_(['pending','queued','running','waiting_external','waiting_retry'])).scalar(),
+        'pending_approvals': db.query(func.count(Approval.id)).filter(
+            Approval.company_id == company_id, Approval.status == 'pending',
+            (Approval.expires_at.is_(None) | (Approval.expires_at > now))).scalar(),
+        'videos_this_month': db.query(func.count(VideoProject.id)).filter(
+            VideoProject.company_id == company_id, VideoProject.is_deleted == False,
+            VideoProject.created_at >= month_start, VideoProject.created_at <= now).scalar(),
+        'total_cost_this_month_usd': float(monthly_cost) / 100,
+        'tasks_completed_today': db.query(func.count(OperationTask.id)).filter(
+            OperationTask.company_id == company_id, OperationTask.status == 'completed',
+            OperationTask.completed_at >= today_start, OperationTask.completed_at <= now).scalar(),
+        'timezone': 'Asia/Shanghai',
         "total_tasks": task_count,
         "completed_tasks": completed_tasks,
         "total_assets": asset_count,
@@ -148,7 +187,15 @@ def analytics_content(
     published = db.query(PublishJob).filter(PublishJob.company_id == company_id, PublishJob.status == "published").all()
     platform_metrics = {}
     account_metrics = {}
+    from app.services.work_metrics import work_values
+    seen_works = set()
     for job in published:
+        values = work_values(job)
+        identity = (job.platform_connection_id, job.provider_post_id or str(job.id))
+        if identity not in seen_works:
+            for key, value in values.items():
+                platform_metrics[key] = platform_metrics.get(key, 0) + value
+            seen_works.add(identity)
         metrics = job.metrics or {}
         if metrics.get('scope') == 'account':
             previous = account_metrics.get(str(job.platform_connection_id))
@@ -156,7 +203,7 @@ def analytics_content(
                 account_metrics[str(job.platform_connection_id)] = metrics
             continue
         for key in ("views", "likes", "comments", "shares", "clicks", "conversions"):
-            if metrics.get(key) is not None:
+            if not values and metrics.get('scope') == 'work' and metrics.get(key) is not None:
                 platform_metrics[key] = platform_metrics.get(key, 0) + float(metrics[key])
     return {
         "posts_created": sum(count for _, count in assets_by_type),
@@ -191,7 +238,11 @@ def analytics_tasks(
         .group_by(OperationTask.task_type)
         .all()
     )
+    statuses = dict(tasks_by_status)
     return {
+        'completed': statuses.get('completed', 0),
+        'running': statuses.get('running', 0),
+        'failed': statuses.get('failed', 0),
         "tasks_by_status": {row[0]: row[1] for row in tasks_by_status},
         "tasks_by_type": {row[0]: row[1] for row in tasks_by_type},
     }
