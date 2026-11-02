@@ -1227,7 +1227,9 @@ def read_work_metrics(company_id, platform, targets, expected_account_id=None):
     page = session['context'].new_page()
     records, seen_pages = [], set()
     complete = False
+    expected_total = None
     def observe(response):
+        nonlocal expected_total
         nonlocal complete
         parsed = urlparse(response.url)
         allowed = (platform == 'wechat_channels' and parsed.hostname == 'channels.weixin.qq.com' and
@@ -1239,7 +1241,12 @@ def read_work_metrics(company_id, platform, targets, expected_account_id=None):
             payload = response.json()
             if payload.get('status_code', 0) != 0 or payload.get('errCode', 0) != 0: return
             records.extend(extract_records(payload, platform))
-            if parsed.path.rstrip('/') == '/janus/douyin/creator/pc/work_list' and 'has_more' in payload and payload['has_more'] in (False, 0): complete = True
+            if parsed.path.rstrip('/') == '/janus/douyin/creator/pc/work_list':
+                if 'has_more' in payload and payload['has_more'] in (False, 0): complete = True
+                total = payload.get('total')
+                if isinstance(total, int) and not isinstance(total,bool) and total >= 0:
+                    expected_total = max(total, expected_total or 0)
+                    if len({record['post_id'] for record in records}) >= expected_total: complete = True
             data = payload.get('data') or {}
             if isinstance(data, dict) and data.get('hasMore') is False: complete = True
         except Exception: pass
@@ -1257,7 +1264,7 @@ def read_work_metrics(company_id, platform, targets, expected_account_id=None):
             page.wait_for_timeout(800)
             body = _page_text(page, timeout=8000)
             fingerprint = hash(body)
-            if fingerprint in seen_pages: break
+            if fingerprint in seen_pages and complete: break
             seen_pages.add(fingerprint)
             next_buttons = page.locator('[aria-label="下一页"]:visible, [title="下一页"]:visible, .ant-pagination-next:visible, .semi-page-next:visible, .el-pagination .btn-next:visible')
             if next_buttons.count() == 0:
@@ -1266,8 +1273,21 @@ def read_work_metrics(company_id, platform, targets, expected_account_id=None):
                 button = visible[0] if len(visible) == 1 else None
             else: button = next_buttons.first if next_buttons.count() == 1 else None
             if button is None:
-                # Without pagination evidence title-only linking is unsafe.
-                break
+                if complete: break
+                # Douyin work management uses a scrolling list in some layouts.
+                # Scroll only; do not click cards or anything in an editor.
+                before_count = len(records)
+                page.evaluate('''() => {
+                    for (const el of [document.scrollingElement, ...document.querySelectorAll('main, section, div')]) {
+                        if (el && el.clientHeight > 200 && el.scrollHeight > el.clientHeight + 50 &&
+                            ['auto','scroll'].includes(getComputedStyle(el).overflowY)) el.scrollTop = el.scrollHeight;
+                    }
+                    window.scrollTo(0, document.body.scrollHeight);
+                }''')
+                page.mouse.wheel(0, 2000)
+                page.wait_for_timeout(1800)
+                if len(records) == before_count: break
+                continue
             disabled = button.is_disabled() or button.get_attribute('aria-disabled') == 'true' or 'disabled' in (button.get_attribute('class') or '')
             if disabled:
                 complete = True; break
@@ -1276,7 +1296,7 @@ def read_work_metrics(company_id, platform, targets, expected_account_id=None):
             return {'status':'login_required','items':{},'message':'平台会话已过期，请重新登录对应账号'}
         items = match_records(targets, records, complete)
         return {'status':'synced' if items else 'unmatched','items':items,
-            'message':None if len(items)==len(targets) else '仅同步明确匹配的作品；未匹配可能因平台分页、发布时间或作品标识缺失，请在云端作品管理核对。'}
+            'message':None if len(items)==len(targets) else f'已读取 {len({record["post_id"] for record in records})} 条平台作品，列表完整：{"是" if complete else "否"}；未匹配作品请核对发布时间、文案或作品标识。'}
     except Exception:
         return {'status':'failed','items':{},'message':'作品数据页面加载失败，请检查平台登录或稍后重试'}
     finally:

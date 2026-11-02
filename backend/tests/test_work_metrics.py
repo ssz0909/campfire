@@ -135,3 +135,41 @@ def test_sync_exception_records_failure_and_preserves_counts(db,monkeypatch):
     db.refresh(account)
     assert account.metrics_snapshot['work_sync']['status']=='failed'
     assert job.metrics['work_metrics']['views']==55
+
+
+def test_creator_scroll_list_collects_until_total_reached(monkeypatch):
+    from app.connectors import web_platform as web
+    now=datetime.now(timezone.utc)
+    page=Mock(url="https://creator.douyin.com/creator-micro/content/manage");page.locator.return_value.count.return_value=0
+    page.get_by_text.return_value.count.return_value=0
+    context=Mock();context.new_page.return_value=page
+    session={'page':Mock(),'context':context}
+    monkeypatch.setattr(web,'_ensure_open',lambda *args:None)
+    monkeypatch.setattr(web,'_get_session',lambda *args:session)
+    monkeypatch.setattr(web,'session_status',lambda *args:{'login_required':False})
+    monkeypatch.setattr(web,'_page_text',lambda *args,**kwargs:'内容管理')
+    observer={}
+    page.on.side_effect=lambda event,callback:observer.update(response=callback)
+    def deliver(identifier,text):
+        response=Mock(url='https://creator.douyin.com/janus/douyin/creator/pc/work_list',status=200)
+        response.json.return_value={'status_code':0,'has_more':True,'total':2,
+            'items':[{'id':identifier,'description':text,'create_time':now.timestamp(), 'metrics':{'view_count':45}}]}
+        observer['response'](response)
+    page.goto.side_effect=lambda *args,**kwargs:deliver('1','酒店A')
+    page.mouse.wheel.side_effect=lambda *args:deliver('2','酒店B')
+    targets=[{'job_id':'a','post_id':None,'title':'酒店A','description':'','created_at':now.isoformat()}]
+    result=web.read_work_metrics.__wrapped__(uuid.uuid4(),'douyin',targets)
+    assert result['items']['a']['views']==45
+    page.mouse.wheel.assert_called_once()
+    page.close.assert_called_once()
+
+
+def test_creator_scan_rejects_wrong_account(monkeypatch):
+    from app.connectors import web_platform as web
+    session={'page':Mock(),'context':Mock()}
+    monkeypatch.setattr(web,'_ensure_open',lambda *args:None)
+    monkeypatch.setattr(web,'_get_session',lambda *args:session)
+    monkeypatch.setattr(web,'session_status',lambda *args:{'login_required':False,'account_fingerprint':'other'})
+    result=web.read_work_metrics.__wrapped__(uuid.uuid4(),'douyin',[],expected_account_id='expected')
+    assert result['status']=='login_required'
+    session['context'].new_page.assert_not_called()
