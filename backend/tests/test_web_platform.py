@@ -343,7 +343,8 @@ def test_polling_saves_without_storage_state_navigation_and_throttles(tmp_path, 
     web_platform._profiles['company:douyin'] = {'page': page, 'context': context}
     for _ in range(3):
         assert web_platform.session_status('company', 'douyin')['session_saved']
-    assert len(calls) == 1
+    # One session save plus one account-fingerprint read per status check.
+    assert len(calls) == 4
     assert len(context.pages) == 1
 
 

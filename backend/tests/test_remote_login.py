@@ -41,6 +41,7 @@ def test_remote_login_text_is_inserted_and_input_focus_returned(monkeypatch):
     typed = []
     frame = SimpleNamespace(evaluate=lambda script: True)
     page = SimpleNamespace(is_closed=lambda: False, keyboard=SimpleNamespace(insert_text=typed.append),
+                           wait_for_timeout=lambda milliseconds: None,
                            frames=[frame], screenshot=lambda **kwargs: b'image',
                            viewport_size={'width': 1440, 'height': 960})
     monkeypatch.setattr(web_platform, '_get_session', lambda *args: {'page': page})
@@ -54,7 +55,8 @@ def test_fill_targets_selected_field_and_rejects_stale_target(monkeypatch):
     from types import SimpleNamespace
     import pytest
     filled = []
-    page = SimpleNamespace(is_closed=lambda: False, frames=[], screenshot=lambda **kwargs: b'image', viewport_size=None)
+    page = SimpleNamespace(is_closed=lambda: False, frames=[], screenshot=lambda **kwargs: b'image', viewport_size=None,
+                           wait_for_timeout=lambda milliseconds: None)
     session = {'page': page, 'login_input': {'id': 'a'*32, 'locator': SimpleNamespace(fill=lambda text, **kwargs: filled.append(text))}}
     monkeypatch.setattr(web_platform, '_get_session', lambda *args: session)
     web_platform.login_view('company', 'douyin', {'kind': 'fill', 'field_id': 'a'*32, 'text': '123456'})
@@ -62,3 +64,18 @@ def test_fill_targets_selected_field_and_rejects_stale_target(monkeypatch):
     with pytest.raises(RuntimeError):
         web_platform.login_view('company', 'douyin', {'kind': 'fill', 'field_id': 'b'*32, 'text': 'wrong'})
     assert filled == ['123456']
+
+
+def test_remote_click_moves_pointer_and_waits_for_ui_before_screenshot(monkeypatch):
+    from types import SimpleNamespace
+    events = []
+    page = SimpleNamespace(
+        is_closed=lambda: False, frames=[], viewport_size={'width':1440,'height':960},
+        mouse=SimpleNamespace(move=lambda x,y: events.append(('move',x,y)),
+                              click=lambda x,y,**kw: events.append(('click',x,y,kw))),
+        wait_for_timeout=lambda ms: events.append(('wait',ms)),
+        screenshot=lambda **kw: events.append(('screenshot',)) or b'image',
+    )
+    monkeypatch.setattr(web_platform, '_get_session', lambda *args: {'page': page})
+    web_platform.login_view('company','douyin',{'kind':'click','x':630,'y':420})
+    assert events == [('move',630,420),('click',630,420,{'delay':80}),('wait',200),('screenshot',)]

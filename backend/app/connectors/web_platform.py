@@ -1147,7 +1147,10 @@ def login_view(company_id, platform, action=None):
     if action:
         kind = action['kind']
         if kind == 'click':
-            page.mouse.click(action['x'], action['y'])
+            # Preserve a normal pointer sequence for provider verification widgets.
+            # Only forward the user's chosen coordinates; never select a challenge.
+            page.mouse.move(action['x'], action['y'])
+            page.mouse.click(action['x'], action['y'], delay=80)
         elif kind == 'drag':
             page.mouse.move(action['x'], action['y'])
             page.mouse.down()
@@ -1170,6 +1173,9 @@ def login_view(company_id, platform, action=None):
             page.mouse.wheel(0, action['delta'])
         elif kind == 'refresh':
             page.reload(wait_until='domcontentloaded', timeout=30000)
+        # Let event handlers and the resulting UI paint before taking the image.
+        # Do not wait for network-idle: login/verification pages poll continuously.
+        page.wait_for_timeout(200)
     import base64
     input_focused = False
     for frame in page.frames:
@@ -1186,6 +1192,10 @@ def login_view(company_id, platform, action=None):
                 const el = document.activeElement;
                 if (!el || !['INPUT','TEXTAREA'].includes(el.tagName) || el.disabled || el.readOnly ||
                     (el.tagName==='INPUT' && !['text','tel','password','number','email','search','url'].includes(el.type))) return null;
+                const rect = el.getBoundingClientRect();
+                const x = Math.max(0, rect.left), y = Math.max(0, rect.top);
+                const right = Math.min(innerWidth, rect.right), bottom = Math.min(innerHeight, rect.bottom);
+                if (right <= x || bottom <= y || document.elementFromPoint((x+right)/2, (y+bottom)/2) !== el) return null;
                 if (!el.dataset.campfireLoginId) el.dataset.campfireLoginId = candidate;
                 return {id: el.dataset.campfireLoginId, type: el.type, placeholder: el.placeholder || '在此输入'};
             }''', uuid.uuid4().hex)

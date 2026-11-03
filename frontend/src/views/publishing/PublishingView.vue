@@ -8,10 +8,11 @@
       <p class="hint">这是云端浏览器的实时画面，请用手机扫码；需要切换登录方式时可直接点击画面，滑块验证可拖动操作。登录成功后本页会更新授权状态。收起画面不会退出平台登录。</p>
       <p v-if="viewError" role="alert" class="error">{{ viewError }} <n-button size="small" :loading="!!opening" @click="authorize(loginPlatform!)">重新打开登录页</n-button></p>
       <div v-if="loginImage" class="login-canvas">
-        <img :src="loginImage" class="login-screen" alt="平台云端登录画面，点击可操作" draggable="false" @pointerdown="startLoginPointer" @pointerup="finishLoginPointer" @pointercancel="loginPointer=null" />
+        <img :src="loginImage" class="login-screen" alt="平台云端登录画面，点击可操作" draggable="false" @pointerdown.prevent="startLoginPointer" @pointerup="finishLoginPointer" @pointercancel="loginPointer=null" @lostpointercapture="loginPointer=null" />
         <input v-if="activeField" :key="activeField.id" ref="directInput" class="login-direct-input" :style="directInputStyle" :type="activeField.type==='password'?'password':'text'" :inputmode="['tel','number'].includes(activeField.type)?'numeric':'text'" :placeholder="activeField.placeholder" :value="directText" maxlength="256" autocomplete="off" aria-label="云端登录输入框" @input="editDirectText" @compositionstart="composing=true" @compositionend="finishComposition" @blur="flushDirectText" @keydown.enter.prevent="submitDirectText" />
       </div>
       <p v-else class="hint">正在加载登录画面…</p>
+      <p v-if="pendingActions" class="hint" role="status">正在同步操作，请稍候…</p>
       <p class="hint">输入手机号或验证码：点击画面里的输入框后，直接在出现的白色输入框中打字，文字会自动同步。下方文字栏也可作为备用。</p><div class="login-toolbar"><n-input ref="loginInput" v-model:value="loginText" type="password" show-password-on="click" placeholder="先点击画面中的输入框，再输入手机号或验证码" @keyup.enter="typeLoginText" /><n-button :disabled="viewBusy || !loginText" @click="typeLoginText">输入到登录页</n-button><n-button :disabled="viewBusy" @click="sendLoginAction({kind:'key',key:'Enter'})">回车</n-button><n-button :disabled="viewBusy" @click="sendLoginAction({kind:'scroll',delta:600})">向下滚动</n-button></div>
     </AppCard>
     <AppCard class="block" v-if="selectedPlatform"><h2>创建发布任务</h2><n-form label-placement="top" @submit.prevent="createJob"><n-form-item label="发布账号"><n-select v-model:value="selectedPlatform" :options="authorizedOptions" /></n-form-item><n-form-item label="标题"><n-input v-model:value="title" maxlength="255" /></n-form-item><n-form-item label="正文/描述"><n-input v-model:value="description" type="textarea" /></n-form-item><n-form-item label="地理位置（平台地点标签）"><n-input v-model:value="locationName" maxlength="100" placeholder="填写平台上的完整酒店地点名称" /></n-form-item><n-form-item label="媒体地址"><n-input v-model:value="mediaUrl" placeholder="填写已审批视频或图文素材地址" /></n-form-item><n-button type="primary" :disabled="!title.trim() || !mediaUrl.trim()" attr-type="submit">立即发布</n-button></n-form></AppCard>
@@ -20,11 +21,13 @@
 </template>
 <script setup lang="ts">
 import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'; import { useRoute } from 'vue-router'; import { NButton, NTag, NForm, NFormItem, NSelect, NInput, type InputInst } from 'naive-ui'; import AppPageHeader from '@/components/common/AppPageHeader.vue'; import AppCard from '@/components/common/AppCard.vue'; import { useAuthStore } from '@/stores/auth'; import { publishingApi, type PublishingPlatform, type PublishJob } from '@/api/publishing'
+import { loginPoint, loginPointerAction, type LoginPointer } from '@/utils/remoteLoginPointer'
 const loginPlatform=ref<PublishingPlatform|null>(null), loginImage=ref(''), loginText=ref(''), viewError=ref(''), viewBusy=ref(false);
+const loginViewport=ref({width:1440,height:960}), pendingActions=ref(0);
 const loginInput=ref<InputInst|null>(null);
 type LoginField={id:string;type:string;placeholder:string;x:number;y:number;width:number;height:number};
 const activeField=ref<LoginField|null>(null), directInput=ref<HTMLInputElement|null>(null), directText=ref(''), composing=ref(false);
-const directInputStyle=computed(()=>activeField.value?{left:`${activeField.value.x/1440*100}%`,top:`${activeField.value.y/960*100}%`,width:`${activeField.value.width/1440*100}%`,height:`${activeField.value.height/960*100}%`}:{});
+const directInputStyle=computed(()=>activeField.value?{left:`${activeField.value.x/loginViewport.value.width*100}%`,top:`${activeField.value.y/loginViewport.value.height*100}%`,width:`${activeField.value.width/loginViewport.value.width*100}%`,height:`${activeField.value.height/loginViewport.value.height*100}%`}:{});
 let directTimer:ReturnType<typeof setTimeout>|undefined;
 let directDirty=false;
 function editDirectText(event:Event){directText.value=(event.target as HTMLInputElement).value;directDirty=true;if(directTimer)clearTimeout(directTimer);if(!composing.value)directTimer=setTimeout(()=>{void flushDirectText()},350)}
@@ -39,9 +42,9 @@ async function submitDirectText(){await flushDirectText();if(!directDirty)await 
 
 let viewGeneration=0;
 let viewRequest:Promise<unknown>=Promise.resolve();
-function closeLoginView(){if(directTimer)clearTimeout(directTimer);directDirty=false;activeField.value=null;directText.value='';viewGeneration++;loginPlatform.value=null;loginImage.value='';loginText.value='';viewError.value=''}
+function closeLoginView(){if(directTimer)clearTimeout(directTimer);directDirty=false;activeField.value=null;directText.value='';viewGeneration++;loginPointer=null;loginPlatform.value=null;loginImage.value='';loginText.value='';viewError.value=''}
 async function refreshLoginView(){
-  if(!loginPlatform.value||viewBusy.value)return;
+  if(!loginPlatform.value||viewBusy.value||pendingActions.value||loginPointer)return;
   await requestLoginView();
 }
 function requestLoginView(action?:Record<string,unknown>):Promise<boolean>{
@@ -53,6 +56,9 @@ function requestLoginView(action?:Record<string,unknown>):Promise<boolean>{
     try{
       const result=action?await publishingApi.webAction(auth.currentCompanyId!,p.platform,action,p.id):await publishingApi.webView(auth.currentCompanyId!,p.platform,p.id);
       if(disposed||generation!==viewGeneration)return false;
+      // An older poll must not replace the picture underneath a user gesture.
+      if(!action&&(loginPointer||pendingActions.value))return true;
+      loginViewport.value={width:result.width,height:result.height};
       loginImage.value=result.image;viewError.value='';
       const field=result.input_field as LoginField|null;
       if(field?.id!==activeField.value?.id){activeField.value=field??null;directText.value='';directDirty=false}
@@ -65,11 +71,11 @@ function requestLoginView(action?:Record<string,unknown>):Promise<boolean>{
   viewRequest=request;
   return request;
 }
-async function sendLoginAction(action:Record<string,unknown>){return requestLoginView(action)}
-let loginPointer:{x:number;y:number}|null=null;
-function loginCoordinates(event:PointerEvent){const rect=(event.currentTarget as HTMLImageElement).getBoundingClientRect();return {x:Math.min(1439,Math.max(0,Math.floor((event.clientX-rect.left)*1440/rect.width))),y:Math.min(959,Math.max(0,Math.floor((event.clientY-rect.top)*960/rect.height)))}}
-function startLoginPointer(event:PointerEvent){loginPointer=loginCoordinates(event);(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)}
-function finishLoginPointer(event:PointerEvent){if(!loginPointer)return;const start=loginPointer,end=loginCoordinates(event);loginPointer=null;void flushDirectText();void sendLoginAction(Math.hypot(end.x-start.x,end.y-start.y)>8?{kind:'drag',...start,end_x:end.x,end_y:end.y}:{kind:'click',...end})}
+async function sendLoginAction(action:Record<string,unknown>){pendingActions.value++;try{return await requestLoginView(action)}finally{pendingActions.value--}}
+let loginPointer:LoginPointer|null=null;
+function loginCoordinates(event:PointerEvent){return loginPoint(event.clientX,event.clientY,(event.currentTarget as HTMLImageElement).getBoundingClientRect(),loginViewport.value)}
+function startLoginPointer(event:PointerEvent){if(!event.isPrimary||event.button!==0)return;loginPointer={id:event.pointerId,clientX:event.clientX,clientY:event.clientY,...loginCoordinates(event)};(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)}
+function finishLoginPointer(event:PointerEvent){if(!loginPointer||event.pointerId!==loginPointer.id)return;const action=loginPointerAction(loginPointer,loginCoordinates(event),event.clientX,event.clientY);loginPointer=null;void flushDirectText();void sendLoginAction(action)}
 async function typeLoginText(){if(viewBusy.value||!loginText.value)return;const text=loginText.value;if(await sendLoginAction({kind:'text',text}) && loginText.value===text)loginText.value=''}
 const submitting=ref(''), republishing=ref('');
 const notice=ref(''), opening=ref(''), checking=ref(''); let pollTimer: ReturnType<typeof setInterval> | undefined; let polling=false; let disposed=false;
@@ -117,4 +123,4 @@ async function republish(j:PublishJob){
 async function syncMetrics(j:PublishJob){try{Object.assign(j,await publishingApi.webMetrics(auth.currentCompanyId!,j.id))}catch(e:any){error.value=e.response?.data?.detail??'平台数据暂不可读取。'}}
 function statusText(s:string){return({waiting_approval:'待发布审批',rejected:'发布审批退回',publishing:'正在发布',draft:'发布草稿',queued:'待 Web 发布',published:'已发布',blocked:'等待平台接口配置',manual_required:'需人工确认',failed:'发布失败',login_required:'需要重新登录'}as Record<string,string>)[s]??s}onMounted(async()=>{await load();if(disposed)return;pollTimer=setInterval(async()=>{if(polling||opening.value||submitting.value)return;polling=true;try{await Promise.all(platforms.value.filter(p=>['authorizing','authorized'].includes(p.status)).map(p=>checkStatus(p)));await refreshLoginView()}finally{polling=false}},4000)});onUnmounted(()=>{disposed=true;closeLoginView();if(pollTimer)clearInterval(pollTimer)})
 </script>
-<style scoped>.account-add{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:20px}.platform strong{margin-right:10px;overflow-wrap:anywhere}.login-canvas{position:relative}.login-direct-input{position:absolute;box-sizing:border-box;z-index:1;min-width:0;padding:2px 8px;border:2px solid #2563eb;border-radius:4px;background:white;color:#111827;font-size:clamp(12px,1.2vw,16px);outline:none}.login-screen{display:block;width:100%;height:auto;border:1px solid var(--border-default);border-radius:8px;cursor:pointer;touch-action:none}.login-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin:12px 0}.login-toolbar h2{margin:0;flex:1}.login-toolbar .n-input{max-width:420px}.login-panel .hint{margin-bottom:12px}.platforms{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:16px}.platform{display:flex;flex-wrap:wrap;gap:10px;justify-content:space-between;align-items:center;border:1px solid var(--border-default);padding:16px;border-radius:8px;min-width:0}.platform p,.hint{color:var(--text-secondary);font-size:13px}.block{margin-top:20px}h2{font-size:18px;margin:0 0 16px}.job{display:flex;gap:12px;align-items:center;padding:12px 0;border-bottom:1px solid var(--border-default);flex-wrap:wrap}.job small{color:var(--color-danger);width:100%}.error{color:var(--color-danger);margin-bottom:16px}.notice{margin-bottom:16px}</style>
+<style scoped>.account-add{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:20px}.platform strong{margin-right:10px;overflow-wrap:anywhere}.login-canvas{position:relative}.login-direct-input{position:absolute;box-sizing:border-box;z-index:1;min-width:0;padding:2px 8px;border:2px solid #2563eb;border-radius:4px;background:white;color:#111827;font-size:clamp(12px,1.2vw,16px);outline:none}.login-screen{display:block;width:100%;height:auto;box-shadow:0 0 0 1px var(--border-default);border-radius:8px;cursor:pointer;touch-action:none}.login-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin:12px 0}.login-toolbar h2{margin:0;flex:1}.login-toolbar .n-input{max-width:420px}.login-panel .hint{margin-bottom:12px}.platforms{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:16px}.platform{display:flex;flex-wrap:wrap;gap:10px;justify-content:space-between;align-items:center;border:1px solid var(--border-default);padding:16px;border-radius:8px;min-width:0}.platform p,.hint{color:var(--text-secondary);font-size:13px}.block{margin-top:20px}h2{font-size:18px;margin:0 0 16px}.job{display:flex;gap:12px;align-items:center;padding:12px 0;border-bottom:1px solid var(--border-default);flex-wrap:wrap}.job small{color:var(--color-danger);width:100%}.error{color:var(--color-danger);margin-bottom:16px}.notice{margin-bottom:16px}</style>
