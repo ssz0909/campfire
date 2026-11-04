@@ -21,12 +21,15 @@
     </div>
     <div class="asset-card__body">
       <p class="asset-card__name" :title="asset.name">{{ asset.name }}</p>
+      <p v-if="asset.metadata?.production_mode === 'raw_model_clip'" class="asset-card__description">AI原始分镜 · {{ asset.metadata.clip_library?.review_status === 'approved' ? '已审核可复用' : '待成片审核' }} · 已复用 {{ asset.metadata.clip_library?.usage_count || 0 }} 次</p>
       <div class="asset-card__meta">
         <AppBadge>{{ asset.asset_type === 'audio' ? '音频' : asset.asset_type }}</AppBadge>
         <span class="asset-card__size">{{ formatBytes(asset.file_size_bytes) }}</span>
       </div>
       <audio v-if="asset.asset_type === 'audio' && asset.processing_status === 'ready' && asset.file_url"
         :src="asset.file_url" controls preload="none" class="asset-card__audio" @click.stop />
+      <video v-if="asset.metadata?.production_mode === 'raw_model_clip' && asset.file_url"
+        :src="asset.file_url" :poster="asset.thumbnail_url" controls preload="none" class="asset-card__audio" @click.stop />
       <div v-if="asset.tags?.length" class="asset-card__tags">
         <AppBadge v-for="tag in asset.tags.slice(0, 3)" :key="tag">{{ tag }}</AppBadge>
       </div>

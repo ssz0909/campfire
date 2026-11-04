@@ -1,4 +1,4 @@
-"""Vision metadata for uploaded hotel images using the configured LLM relay."""
+"""Vision metadata for uploaded images using the configured LLM relay."""
 import asyncio
 import base64
 import io
@@ -21,8 +21,8 @@ def analyze_image(content: bytes, mime_type: str) -> dict:
     buffer=io.BytesIO();image.save(buffer,format='JPEG',quality=82,optimize=True)
     data='data:image/jpeg;base64,'+base64.b64encode(buffer.getvalue()).decode('ascii')
     messages=[
-        {'role':'system','content':'你是酒店素材库视觉标注员。只描述画面可见事实，不推测酒店名称、星级、价格、服务承诺或版权。将图片归入预设类别之一，中文输出严格 JSON：{"category":"...","tags":["..."],"caption":"...","visual_description":"...","people_visible":false}. tags 为 3 至 8 个简洁中文主题词。category 必须是这些值之一：'+','.join(CATEGORIES)},
-        {'role':'user','content':[{'type':'text','text':'识别这张酒店运营素材，供按主题检索和视频选材。'},
+        {'role':'system','content':'你是通用素材库视觉标注员，图片可来自任何行业。只描述画面可见事实，不推测品牌名称、价格、服务承诺或版权；不把普通图片默认描述为酒店。将图片归入预设类别之一，中文输出严格 JSON：{"category":"...","tags":["..."],"caption":"...","visual_description":"...","people_visible":false}. tags 为 3 至 8 个简洁中文主题词。category 必须是这些值之一：'+','.join(CATEGORIES)},
+        {'role':'user','content':[{'type':'text','text':'识别这张图片素材，供按主题检索和视频选材。'},
                                   {'type':'image_url','image_url':{'url':data,'detail':'low'}}]},
     ]
     response=asyncio.run(OpenAIProvider(config=config).complete(messages,max_tokens=500,temperature=0.1))

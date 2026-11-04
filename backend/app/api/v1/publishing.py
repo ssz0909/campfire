@@ -149,6 +149,21 @@ def web_login_view(company_id: uuid.UUID, platform: str, response: Response, con
     return _login_view(company_id, platform, response, row=row)
 
 
+@router.get('/{company_id}/publishing/{platform}/web/diagnostics')
+def web_login_diagnostics(company_id: uuid.UUID, platform: str, response: Response, connection_id: uuid.UUID | None = Query(None),
+                          db: Session = Depends(get_db), _: User = Depends(require_permission(Permission.PUBLISH_CREATE))):
+    from app.connectors.web_platform import login_diagnostics
+    from app.services.publishing_service import session_options
+    row = get_connection(db, company_id, platform, connection_id)
+    response.headers['Cache-Control'] = 'no-store'
+    try:
+        return login_diagnostics(company_id, platform, **session_options(row))
+    except ValueError as exc:
+        raise HTTPException(400, '不支持的发布平台') from exc
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
 @router.post('/{company_id}/publishing/{platform}/web/action')
 def web_login_action(company_id: uuid.UUID, platform: str, data: LoginViewAction, response: Response, connection_id: uuid.UUID | None = Query(None),
                      db: Session = Depends(get_db), _: User = Depends(require_permission(Permission.PUBLISH_CREATE))):

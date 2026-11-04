@@ -59,6 +59,7 @@ def test_recovery_uses_existing_provider_id(db, monkeypatch, tmp_path):
     from unittest.mock import AsyncMock,Mock
     from contextlib import contextmanager
     user=create_test_user(db);company=create_test_company(db,user)
+    company.business_goals={'video_branding':{'enabled':True,'text':'安吉雲中溪','duration_seconds':3}}
     project=VideoProject(company_id=company.id,created_by=user.id,title='恢复生成',creation_mode='prompt_to_video',
         project_status='generating_shots',target_duration_seconds=5,aspect_ratio='9:16')
     db.add(project);db.flush()
@@ -90,12 +91,18 @@ def test_recovery_uses_existing_provider_id(db, monkeypatch, tmp_path):
     monkeypatch.setattr('app.services.media_processing.enrich_video_asset',lambda *args:None)
     monkeypatch.setattr('app.services.media_processing.inspect_video',lambda *args:({}, b''))
     monkeypatch.setattr('app.services.media_processing.assemble_model_clips',lambda clips,*args:clips[0])
+    wordmark=Mock(return_value=b'video')
+    monkeypatch.setattr('app.services.video_branding.add_opening_wordmark',wordmark)
     generation.run(str(project.id))
+    assert wordmark.call_count == 1
+    assert wordmark.call_args.args == (b'video','安吉雲中溪',3)
+    assert wordmark.call_args.kwargs['style'].position == 'top_center'
     assert provider.submit_generation.call_count==0
     assert provider.get_task_status.call_args.args==('existing',)
     db.refresh(project)
     assert project.project_status=='pending_review'
     assert db.get(Asset,project.output_asset_id).file_size_bytes==5
+    assert db.get(Asset,project.output_asset_id).asset_metadata['opening_brand']['text']=='安吉雲中溪'
     assert (tmp_path/db.get(Asset,project.output_asset_id).file_key).read_bytes()==b'video'
 
 def test_restart_never_submits_unconfirmed_job(db,monkeypatch):

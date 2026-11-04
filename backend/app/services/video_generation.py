@@ -19,6 +19,12 @@ logger = logging.getLogger(__name__)
 _active = set()
 _active_lock = threading.Lock()
 
+def _finalize_content(db, project, content, storage):
+    from app.services.video_music import apply_music
+    from app.services.video_branding import apply_opening_branding
+    content = apply_music(db, project, content, storage)
+    return apply_opening_branding(db, project, content)
+
 def reference_url(db, project, asset_id=None, shot=None):
     reference_id = asset_id or project.reference_asset_id
     if not reference_id:
@@ -60,23 +66,44 @@ def _compose_selected_images(db, project, selected_ids):
     from app.providers.video.base import VideoGenerationRequest
     from app.services.media_processing import assemble_model_clips, enrich_video_asset
     storage = StorageService(settings.STORAGE_BACKEND)
-    client = provider()
+    client = None
     clips, shots = [], []
+    original_plan = project.storyboard or []
+    cost = getattr(project, 'generation_mode', 'quality') == 'cost'
     planned = bool(project.storyboard and project.storyboard[0].get('planning_version') == 2)
-    if planned:
+    if cost:
+        from app.services.video_cost_plan import validate_cost_plan
+        plan = validate_cost_plan(project.storyboard, [{'id':str(v)} for v in selected_ids], project.target_duration_seconds)
+        duration = project.target_duration_seconds
+    elif planned:
         from app.services.video_director import validate_plan
         plan = validate_plan(project.storyboard, [{'id':str(v)} for v in selected_ids], project.target_duration_seconds, allow_legacy_reuse=True)
         duration = project.target_duration_seconds
     else:
         duration = max(float(project.target_duration_seconds or 5), 5 * len(selected_ids))
         plan = [{'source_asset_id':str(asset_id), 'duration_seconds':duration/len(selected_ids)} for asset_id in selected_ids]
+    from app.services.video_clip_library import plan_reuse, read_reused_clip, record_use
+    # Validation strips execution metadata. Restore only trusted server-side
+    # pins, then revalidate approval and compatibility in plan_reuse.
+    pins = {s.get('shot_number'): s.get('reused_asset_id') for s in original_plan}
+    project.storyboard = [
+        {**s, 'shot_number':i, **({'reused_asset_id':pins[i]} if pins.get(i) else {})}
+        for i,s in enumerate(plan, 1)
+    ]
+    plan = plan_reuse(db, project, storage)
+    project.storyboard = plan
+    db.commit()
+    generated_count, reused_count = 0, 0
     for number, shot in enumerate(plan, 1):
         asset_id = uuid.UUID(shot['source_asset_id'])
         asset = by_id[asset_id]
         analysis = (asset.asset_metadata or {}).get('vision_analysis') or {}
         description = analysis.get('visual_description') or asset.source_description or asset.name
         clip_duration = shot['duration_seconds']
-        if planned:
+        if cost:
+            from app.services.video_cost_plan import cost_prompt
+            prompt = cost_prompt(shot['subshots'], clip_duration) + f'\n当前参考图可见事实：{description}。'
+        elif planned:
             from app.services.video_director import shot_generation_prompt
             prompt = (f"{shot_generation_prompt(plan, number-1)}\n当前镜头可见事实：{description}。"
                       f"景别：{shot['framing']}；运镜：{shot['camera_movement']}。"
@@ -84,36 +111,52 @@ def _compose_selected_images(db, project, selected_ids):
                       '保持建筑直线与主体结构，避免闪烁、扭曲。动作从片段起始即自然展开。')
         else:
             prompt = (f'{project.script or project.marketing_goal or project.title}\n'
-                      f'现在只生成第{number}个动态镜头：{description}。保持参考图中的酒店真实环境，'
+                      f'现在只生成第{number}个动态镜头：{description}。保持参考图中的真实主体与场景，'
                       f'统一{project.aspect_ratio}构图。自然缓慢推进或横移，不得生成照片轮播或虚构设施。')
-        request = VideoGenerationRequest(prompt=prompt, duration_seconds=5 if planned else clip_duration,
-            aspect_ratio=project.aspect_ratio, style=project.video_style,
-            reference_image_url=reference_url(db, project, asset_id, shot=shot) if planned else reference_url(db, project, asset_id),
-            resolution=settings.VIDEO_RESOLUTION, audio=False if project.music_asset_id else settings.VIDEO_AUDIO)
-        clip, task = _generate_clip(db, project, client, request, shot_number=number)
+        if shot.get('reused_asset_id'):
+            clip, reused_asset = read_reused_clip(db, project, shot, storage)
+            record_use(db, project, reused_asset)
+            task_id, output_asset_id = None, str(reused_asset.id)
+            reused_count += 1
+        else:
+            if project.reuse_policy == 'reuse_only':
+                raise ValueError('仅用已有素材模式禁止提交视频模型')
+            request = VideoGenerationRequest(prompt=prompt, duration_seconds=5 if planned or cost else clip_duration,
+                aspect_ratio=project.aspect_ratio, style=project.video_style,
+                reference_image_url=reference_url(db, project, asset_id, shot=shot) if planned or cost else reference_url(db, project, asset_id),
+                resolution=settings.VIDEO_RESOLUTION, audio=False if project.music_asset_id else settings.VIDEO_AUDIO)
+            if client is None:
+                client = provider()
+            clip, task = _generate_clip(db, project, client, request, shot_number=number)
+            task_id, output_asset_id = task.provider_task_id, str(task.raw_asset_id) if task.raw_asset_id else None
+            generated_count += 1
         clips.append(clip)
         shots.append({**shot, 'shot_number':number, 'visual_description':shot.get('visual_description') or description,
             'duration_seconds':clip_duration, 'source_asset_id':str(asset.id),
-            'generation_status':'completed', 'generation_task_id':task.provider_task_id})
-        project.storyboard = list(shots) + plan[number:] if planned else list(shots)
+            'generation_status':'completed', 'generation_task_id':task_id, 'output_asset_id':output_asset_id})
+        project.storyboard = list(shots) + plan[number:] if planned or cost else list(shots)
         db.commit()
     project.project_status = 'compositing'; db.commit()
-    content = assemble_model_clips(clips, project.aspect_ratio, [s['duration_seconds'] for s in plan] if planned else clip_duration)
-    from app.services.video_music import apply_music
-    content = apply_music(db,project,content,storage)
+    content = assemble_model_clips(clips, project.aspect_ratio, [s['duration_seconds'] for s in plan] if planned or cost else clip_duration)
+    content, branding = _finalize_content(db, project, content, storage)
     key = f'{project.company_id}/generated/{uuid.uuid4()}.mp4'
     asset = Asset(company_id=project.company_id, uploaded_by=project.created_by, name=project.title,
-        original_filename='generated-hotel-video.mp4', file_key=key,
+        original_filename='generated-video.mp4', file_key=key,
         file_url=storage.upload_file(content, key, 'video/mp4'), asset_type='video', mime_type='video/mp4',
-        file_size_bytes=len(content), processing_status='ready', source_description='视频模型生成的多镜头酒店宣传片',
-        asset_metadata={'production_mode':'video_model_multi_shot', 'source_asset_ids':[str(v) for v in selected_ids]})
+        file_size_bytes=len(content), processing_status='ready', source_description='视频模型生成的多镜头主题短片',
+        asset_metadata={'production_mode':'video_model_multi_shot', 'source_asset_ids':[str(v) for v in selected_ids],
+            'generation_mode':getattr(project, 'generation_mode', 'quality'),
+            'reuse_policy':project.reuse_policy, 'reused_clips':reused_count,
+            'opening_brand': branding})
     enrich_video_asset(asset, storage, content)
     db.add(asset); db.flush()
     project.output_asset_id = asset.id
     project.target_duration_seconds = int(duration)
     project.project_status = 'pending_review'
     project.quality_check_result = {'status':'generated', 'production_mode':'video_model_multi_shot',
-        'note':f'已通过视频模型生成 {len(clips)} 个动态镜头并统一画幅合成，请审核成片与酒店发布文案。'}
+        'generation_mode':getattr(project, 'generation_mode', 'quality'), 'generation_requests':generated_count,
+        'reused_clips':reused_count, 'reuse_policy':project.reuse_policy,
+        'note':f'本片复用 {reused_count} 个分镜，使用 {generated_count} 个模型生成片段，已统一画幅合成，请审核成片与发布文案。'}
     db.commit()
 
 
@@ -151,6 +194,11 @@ def recover():
 
 def _generate_clip(db, project, client, request, shot_number=None):
     task = db.query(ProviderTask).filter_by(video_project_id=project.id, company_id=project.company_id, shot_number=shot_number).order_by(ProviderTask.created_at.desc(), ProviderTask.id.desc()).first()
+    if task and task.status == 'completed' and task.raw_asset_id:
+        from app.services.video_clip_library import load_raw_clip
+        content = load_raw_clip(db, project, task, StorageService(settings.STORAGE_BACKEND))
+        if content is not None:
+            return content, task
     if task and task.status == 'retry_requested':
         task = None
     if task and task.status == 'completed' and task.output_url:
@@ -215,6 +263,8 @@ def _generate_clip(db, project, client, request, shot_number=None):
     if not content: raise ValueError('生成视频文件为空')
     from app.services.media_processing import inspect_video
     inspect_video(content)
+    from app.services.video_clip_library import save_raw_clip
+    save_raw_clip(db, project, task, content, StorageService(settings.STORAGE_BACKEND))
     task.status='completed'
     task.completed_at=datetime.now(timezone.utc)
     task.error_message=None
@@ -252,13 +302,15 @@ def run(project_id):
             db.commit()
             return
         selected_ids=[uuid.UUID(str(value)) for value in (project.selected_asset_ids or [])]
-        client = provider()
-        if selected_ids and project.storyboard and project.storyboard[0].get('planning_version') == 2:
+        if selected_ids and project.storyboard and (getattr(project, 'generation_mode', 'quality') == 'cost' or project.storyboard[0].get('planning_version') == 2):
             _compose_selected_images(db, project, selected_ids)
             return
         if len(selected_ids)>1:
             _compose_selected_images(db, project, selected_ids)
             return
+        if project.reuse_policy == 'reuse_only':
+            raise ValueError('仅用已有素材需要图片分镜计划；未调用视频模型')
+        client = provider()
         from app.providers.video.base import VideoGenerationRequest
         selected = db.query(Asset).filter(Asset.company_id==project.company_id, Asset.id.in_(selected_ids)).all() if selected_ids else []
         visual_notes = []
@@ -271,22 +323,21 @@ def run(project_id):
             prompt += '\n参考素材画面要点：\n' + '\n'.join(visual_notes)
         prompt += (f'\n必须生成真正连续运动的视频，不得做图片轮播、幻灯片或静态画面拼接。'
                    f'画面比例严格为 {project.aspect_ratio}，所有主体保持完整，禁止横竖屏混排、拉伸和黑边。'
-                   '使用首帧参考图的酒店环境，添加自然镜头运动、人物或环境动态；只使用参考素材中可见的酒店事实。')
+                   '如提供首帧参考图，保持其真实主体与场景，添加自然镜头运动及可见主体的合理动态，不虚构素材之外的人物或设施；未提供参考图时按用户脚本和主题生成。')
         request = VideoGenerationRequest(prompt=prompt,duration_seconds=project.target_duration_seconds or 5,
             aspect_ratio=project.aspect_ratio,style=project.video_style,
             reference_image_url=reference_url(db, project), resolution=settings.VIDEO_RESOLUTION, audio=False if project.music_asset_id else settings.VIDEO_AUDIO)
         content, task = _generate_clip(db, project, client, request)
         from app.services.media_processing import assemble_model_clips
         content = assemble_model_clips([content], project.aspect_ratio, project.target_duration_seconds or 5)
-        from app.services.video_music import apply_music
-        content = apply_music(db,project,content,StorageService(settings.STORAGE_BACKEND))
+        content, branding = _finalize_content(db, project, content, StorageService(settings.STORAGE_BACKEND))
         size = len(content)
         key = f'{project.company_id}/generated/{uuid.uuid4()}.mp4'
         url = StorageService(settings.STORAGE_BACKEND).upload_file(content,key,'video/mp4')
         asset = Asset(company_id=project.company_id,uploaded_by=project.created_by,name=project.title,
             original_filename='generated.mp4',file_key=key,file_url=url,asset_type='video',mime_type='video/mp4',
             file_size_bytes=size,processing_status='ready',source_description='AI 视频生成',
-            asset_metadata={'provider':'relay','provider_task_id':task.provider_task_id})
+            asset_metadata={'provider':'relay','provider_task_id':task.provider_task_id,'opening_brand':branding})
         from app.services.media_processing import enrich_video_asset
         enrich_video_asset(asset, StorageService(settings.STORAGE_BACKEND), content)
         db.add(asset);db.flush()

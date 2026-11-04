@@ -23,6 +23,40 @@ router = APIRouter()
 
 from app.services.publish_location import PublishLocationSettings, resolve_location
 from app.schemas.video_project import DefaultMusicSettings
+from app.services.video_branding import VideoBrandingSettings
+
+
+@router.get('/{company_id}/video-branding/fonts')
+def video_branding_fonts(company_id: uuid.UUID,
+    _: User = Depends(require_permission(Permission.COMPANY_VIEW))):
+    from app.services.video_branding import brand_font_options
+    return brand_font_options()
+
+
+@router.post('/{company_id}/video-branding/preview')
+def preview_video_branding(company_id: uuid.UUID, data: VideoBrandingSettings,
+    aspect: str = Query('9:16', pattern=r'^(9:16|16:9|1:1)$'),
+    _: User = Depends(require_permission(Permission.COMPANY_VIEW))):
+    import base64
+    import io
+    from app.services.video_branding import wordmark_image
+    width, height = {'9:16': (720, 1280), '16:9': (1280, 720), '1:1': (960, 960)}[aspect]
+    try:
+        image = wordmark_image(data.text, width, height, data)
+    except ValueError as exc:
+        from fastapi import HTTPException
+        raise HTTPException(422, str(exc)) from exc
+    image.thumbnail((480, 480))
+    output = io.BytesIO()
+    image.save(output, format='PNG')
+    return {'image_base64': base64.b64encode(output.getvalue()).decode('ascii')}
+
+
+@router.put('/{company_id}/video-branding', response_model=CompanyResponse)
+def set_video_branding(company_id: uuid.UUID, data: VideoBrandingSettings,
+    _: User = Depends(require_permission(Permission.COMPANY_EDIT)), db: Session = Depends(get_db)):
+    from app.services.video_branding import set_video_branding as save
+    return save(db, company_id, data)
 
 
 @router.put('/{company_id}/default-video-music', response_model=CompanyResponse)

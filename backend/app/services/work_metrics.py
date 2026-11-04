@@ -116,7 +116,7 @@ def _time(value):
 def sync_account(db, company_id, account_id):
     """Claim one account across processes, then capture a bounded work-list scan."""
     from app.services.publishing_service import session_options, identity_options
-    from app.connectors.web_platform import read_work_metrics
+    from app.connectors.web_metrics_api import read_work_metrics
     lease = None
     lock_key = uuid.UUID(str(account_id)).int % (2**63-1)
     try:
@@ -161,11 +161,13 @@ def sync_account(db, company_id, account_id):
                     except (TypeError, ValueError, OverflowError, OSError): pass
                 matched += 1
             else:
-                metrics.update(work_sync_status=result.get('status') if result.get('status') != 'synced' else 'unmatched',
-                               work_sync_message=result.get('message') or '未能唯一匹配作品，请在对应账号作品管理检查；保留上次采集值')
+                metrics.update(work_sync_status=(result.get('unmatched_statuses') or {}).get(str(job.id)) or (result.get('status') if result.get('status') not in ('synced','partial') else 'unmatched'),
+                               work_sync_message=(result.get('unmatched_messages') or {}).get(str(job.id)) or result.get('message') or '未能唯一匹配作品，请在对应账号作品管理检查；保留上次采集值')
             job.metrics = metrics
         state.update(status=result.get('status','failed'), completed_at=datetime.now(timezone.utc).isoformat(),
-                     matched=matched, total=len(jobs), message=result.get('message'))
+                     matched=matched, total=len(jobs), message=result.get('message'),
+                     record_count=result.get('record_count'), list_complete=result.get('list_complete'),
+                     transport=result.get('transport'))
         account.metrics_snapshot = {**(account.metrics_snapshot or {}), 'work_sync':state}
         db.commit()
     except Exception:

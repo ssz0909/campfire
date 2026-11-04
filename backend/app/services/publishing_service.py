@@ -36,7 +36,7 @@ def session_options(row):
 
 
 def identity_options(row):
-    return {'expected_account_id':row.account_id} if row.account_id and row.account_id.startswith('websha256:') else {}
+    return {'expected_account_id':row.account_id} if row.account_id and row.account_id.startswith(('websha256:', 'webuidsha256:')) else {}
 
 
 def get_account(db, company_id, account_id):
@@ -228,12 +228,22 @@ def web_status(db, company_id, platform, connection_id=None):
     result = session_status(company_id, platform, **session_options(row))
     if row:
         fingerprint = result.get('account_fingerprint')
-        if result.get('status') == 'authorized' and fingerprint:
-            if row.account_id and row.account_id.startswith('websha256:') and row.account_id != fingerprint:
-                result = {**result, 'status':'login_required', 'message':'当前登录账号与已绑定账号不一致，请退出并重新登录原账号'}
+        if result.get('status') in ('authorized', 'session_saved') and fingerprint:
+            expected = row.account_id
+            legacy_match = (expected and expected.startswith('websha256:')
+                            and fingerprint.startswith('webuidsha256:')
+                            and result.get('identity_verified') is True
+                            and result.get('legacy_account_fingerprint') == expected)
+            if expected and expected.startswith(('websha256:', 'webuidsha256:')) and expected != fingerprint and not legacy_match:
+                result = {**result, 'status':'login_required', 'login_required':True,
+                          'session_saved':False, 'publish_ready':False, 'identity_mismatch':True,
+                          'message':'当前登录账号与已绑定账号不一致，请退出并重新登录原账号'}
                 row.last_error = result['message']
             else:
                 row.account_id = fingerprint
+                if result.get('account_name'):
+                    row.account_name = result['account_name']
+                row.last_error = None
         row.status = {"authorized": "authorized", "session_saved": "session_saved", "login_required": "authorizing"}.get(result.get("status"), "disconnected")
         if row.status == "authorized":
             row.authorized_at = row.authorized_at or datetime.now(timezone.utc)

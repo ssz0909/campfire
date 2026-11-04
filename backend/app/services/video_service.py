@@ -100,7 +100,11 @@ class VideoService:
                 raise HTTPException(422,'背景音乐音量不能为空')
             from app.services.video_music import music_asset
             music_asset(self.db,company_id,updates.get('music_asset_id',project.music_asset_id))
-        if any(key in updates for key in ('selected_asset_ids','target_duration_seconds','aspect_ratio')):
+        if 'generation_mode' in updates and updates['generation_mode'] is None:
+            raise HTTPException(422,'视频生成策略不能为空')
+        if 'reuse_policy' in updates and updates['reuse_policy'] is None:
+            raise HTTPException(422,'素材使用策略不能为空')
+        if any(key in updates for key in ('selected_asset_ids','target_duration_seconds','aspect_ratio','generation_mode','reuse_policy')):
             if project.project_status!='draft':raise HTTPException(409,'只能在生成前调整分镜、时长和素材')
             project.storyboard=None
         if 'selected_asset_ids' in updates:
@@ -154,10 +158,6 @@ class VideoService:
             from app.services.execution_loop import enabled, assert_active
             source=self.db.query(OperationTask).filter_by(id=project.task_id, company_id=company_id).first()
             if source and enabled(source): assert_active(self.db,source)
-        try:
-            provider()
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
         if project.creation_mode not in ("prompt_to_video", "ai_creative", "reference_inspired", "reference_inspired_video"):
             raise HTTPException(status_code=400, detail="不支持的视频创建模式")
         from app.services.video_generation import reference_url
@@ -167,10 +167,10 @@ class VideoService:
             self._validate_selected_assets(company_id,project.selected_asset_ids or [])
             if project.selected_asset_ids and not project.reference_asset_id:
                 project.reference_asset_id=uuid.UUID(str(project.selected_asset_ids[0]))
-            if project.selected_asset_ids:
+            if project.selected_asset_ids and project.reuse_policy == 'fresh':
                 for asset_id in project.selected_asset_ids:
                     reference_url(self.db, project, uuid.UUID(str(asset_id)))
-            else:
+            elif not project.selected_asset_ids and project.reuse_policy != 'reuse_only':
                 reference_url(self.db, project)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -184,13 +184,34 @@ class VideoService:
             by_id={str(a.id):a for a in assets}
             descriptors=[{'id':str(v),'name':by_id[str(v)].name,'description':((by_id[str(v)].asset_metadata or {}).get('vision_analysis') or {}).get('visual_description') or by_id[str(v)].source_description} for v in ids]
             project.target_duration_seconds=max(15,min(60,project.target_duration_seconds or 30))
-            project.storyboard=fallback_plan(descriptors,project.target_duration_seconds)
+            if project.generation_mode == 'cost':
+                from app.services.video_cost_plan import cost_plan
+                try: project.storyboard=cost_plan(descriptors,project.target_duration_seconds)
+                except ValueError as exc: raise HTTPException(422,str(exc)) from exc
+            else:
+                project.storyboard=fallback_plan(descriptors,project.target_duration_seconds)
+        if project.generation_mode == 'cost':
+            from app.services.video_cost_plan import validate_cost_plan
+            try:
+                validate_cost_plan(project.storyboard or [], [{'id':str(v)} for v in project.selected_asset_ids or []], project.target_duration_seconds or 30)
+            except ValueError as exc: raise HTTPException(422,str(exc)) from exc
         if not retry and project.storyboard and project.storyboard[0].get('planning_version') == 2:
             from app.services.video_director import validate_plan
             try:
                 validate_plan(project.storyboard, [{'id':str(v)} for v in project.selected_asset_ids or []],project.target_duration_seconds)
             except ValueError as exc:
                 raise HTTPException(422,str(exc)) from exc
+        from app.services.video_clip_library import plan_reuse
+        from app.services.storage_service import StorageService
+        from app.config import settings
+        try:
+            project.storyboard = plan_reuse(self.db, project, StorageService(settings.STORAGE_BACKEND)) if project.storyboard else project.storyboard
+            if project.reuse_policy == 'reuse_only' and (not project.storyboard or any(not s.get('reused_asset_id') for s in project.storyboard)):
+                raise ValueError('仅用已有素材缺少已审核且匹配的分镜，未调用视频模型')
+            if not project.storyboard or any(not s.get('reused_asset_id') for s in project.storyboard):
+                provider()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         project.quality_check_result = None
         project.review_status = 'pending_review'
         project.project_status = "analyzing"
@@ -293,6 +314,8 @@ class VideoService:
                     if Permission.PUBLISH_EXECUTE not in get_user_permissions(reviewer_id, company_id, self.db):
                         raise HTTPException(403, '审核后将自动发布，请由具有平台发布权限的成员审核')
         project.review_status = "approved"
+        from app.services.video_clip_library import approve_project_clips
+        approve_project_clips(self.db, project)
         if project.project_status == "pending_review":
             project.project_status = "completed"
         from app.services.execution_loop import queue_publications, publication_copy
@@ -312,9 +335,17 @@ class VideoService:
         project = self.get_project(company_id, project_id)
         if project.project_status != 'draft':
             raise HTTPException(409,'分镜提交生成后不能修改，请另建项目以免复用错误的生成任务')
-        from app.services.video_director import validate_plan
         try:
-            project.storyboard = validate_plan(data.storyboard,[{'id':str(v)} for v in project.selected_asset_ids or []],project.target_duration_seconds or 30)
+            # Client-supplied cache pins and generation state must never bypass
+            # matching, approval, or billing checks.
+            cleaned = [{k:v for k,v in s.items() if k not in
+                ('reused_asset_id','output_asset_id','generation_task_id','generation_status')} for s in data.storyboard]
+            if project.generation_mode == 'cost':
+                from app.services.video_cost_plan import validate_cost_plan
+                project.storyboard = validate_cost_plan(cleaned,[{'id':str(v)} for v in project.selected_asset_ids or []],project.target_duration_seconds or 30)
+            else:
+                from app.services.video_director import validate_plan
+                project.storyboard = validate_plan(cleaned,[{'id':str(v)} for v in project.selected_asset_ids or []],project.target_duration_seconds or 30)
         except ValueError as exc:
             raise HTTPException(422,str(exc)) from exc
         self.db.commit()

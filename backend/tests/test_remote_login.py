@@ -36,6 +36,25 @@ def test_remote_login_closed_session_and_unsupported_platform(monkeypatch):
         web_platform.login_view('company', 'unknown')
 
 
+def test_login_diagnostics_requires_company_permission(client, db, monkeypatch):
+    owner = create_test_user(db)
+    company = create_test_company(db, owner)
+    outsider = create_test_user(db, email='diagnostic-outsider@example.com')
+    calls = []
+    def inspect(company_id, platform):
+        calls.append((company_id,platform))
+        return {'pages':1,'frames':[]}
+    monkeypatch.setattr(web_platform,'login_diagnostics',inspect)
+    url = f'/api/v1/companies/{company.id}/publishing/douyin/web/diagnostics'
+    assert client.get(url).status_code == 401
+    assert client.get(url,headers=auth_headers(outsider)).status_code == 403
+    assert not calls
+    response = client.get(url,headers=auth_headers(owner))
+    assert response.status_code == 200
+    assert response.headers['cache-control'] == 'no-store'
+    assert len(calls) == 1
+
+
 def test_remote_login_text_is_inserted_and_input_focus_returned(monkeypatch):
     from types import SimpleNamespace
     typed = []
@@ -71,6 +90,7 @@ def test_remote_click_moves_pointer_and_waits_for_ui_before_screenshot(monkeypat
     events = []
     page = SimpleNamespace(
         is_closed=lambda: False, frames=[], viewport_size={'width':1440,'height':960},
+        evaluate=lambda *args: False,
         mouse=SimpleNamespace(move=lambda x,y: events.append(('move',x,y)),
                               click=lambda x,y,**kw: events.append(('click',x,y,kw))),
         wait_for_timeout=lambda ms: events.append(('wait',ms)),
@@ -79,3 +99,15 @@ def test_remote_click_moves_pointer_and_waits_for_ui_before_screenshot(monkeypat
     monkeypatch.setattr(web_platform, '_get_session', lambda *args: {'page': page})
     web_platform.login_view('company','douyin',{'kind':'click','x':630,'y':420})
     assert events == [('move',630,420),('click',630,420,{'delay':80}),('wait',200),('screenshot',)]
+
+
+def test_element_activation_error_is_not_retried_as_a_second_mouse_click():
+    import pytest
+    from types import SimpleNamespace
+    calls = []
+    def evaluate(*args):
+        raise RuntimeError('activation failed')
+    page = SimpleNamespace(evaluate=evaluate,mouse=SimpleNamespace(click=lambda *a,**kw:calls.append(a)))
+    with pytest.raises(RuntimeError,match='activation failed'):
+        web_platform._click_login_point(page,720,490)
+    assert not calls

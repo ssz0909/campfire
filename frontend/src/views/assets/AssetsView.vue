@@ -38,8 +38,8 @@
 
     <!-- Filters -->
     <div class="asset-filters">
-      <n-input v-model:value="search" clearable placeholder="按主题、标签、描述筛选" @update:value="loadAssets" />
-      <n-select v-if="typeFilter !== 'audio'" v-model:value="categoryFilter" clearable placeholder="全部场景类别" :options="categoryOptions" @update:value="loadAssets" />
+      <n-input v-model:value="search" clearable placeholder="按主题、标签、描述筛选" @update:value="changeFilter" />
+      <n-select v-if="typeFilter !== 'audio'" v-model:value="categoryFilter" clearable placeholder="全部场景类别" :options="categoryOptions" @update:value="changeFilter" />
       <n-radio-group v-model:value="typeFilter" @update:value="changeType">
         <n-radio-button value="">{{ t('All') }}</n-radio-button>
         <n-radio-button value="image">{{ t('Images') }}</n-radio-button>
@@ -57,7 +57,6 @@
         </AppCard>
       </div>
     </template>
-
     <template v-else-if="assets.length === 0">
       <AppEmpty
         :icon="ImagesOutline"
@@ -81,6 +80,8 @@
         <n-data-table :columns="listColumns" :data="assets" :bordered="false" />
       </AppCard>
     </template>
+
+    <div v-if="total > 0" class="pagination-row"><span>共 {{ total }} 条</span><n-pagination v-if="total > pageSize" v-model:page="page" :page-size="pageSize" :item-count="total" @update:page="loadAssets" /></div>
 
     <n-modal v-model:show="showEdit" preset="card" title="修正素材信息" style="width:min(560px, calc(100vw - 32px))">
       <n-form v-if="editingAsset" label-placement="top">
@@ -107,7 +108,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, h } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { NButton, NButtonGroup, NProgress, NRadioGroup, NRadioButton, NDataTable, NInput, NSelect, NModal, NForm, NFormItem, useMessage, type DataTableColumns } from 'naive-ui'
+import { NButton, NButtonGroup, NProgress, NRadioGroup, NRadioButton, NDataTable, NPagination, NInput, NSelect, NModal, NForm, NFormItem, useMessage, type DataTableColumns } from 'naive-ui'
 import { GridOutline, ListOutline, ImagesOutline } from '@vicons/ionicons5'
 import AppPageHeader from '@/components/common/AppPageHeader.vue'
 import AppCard from '@/components/common/AppCard.vue'
@@ -127,6 +128,8 @@ const companyId = computed(() => authStore.currentCompanyId!)
 
 const loading = ref(true)
 const assets = ref<Asset[]>([])
+const page = ref(1), total = ref(0), pageSize = 20
+let requestVersion = 0
 const viewMode = ref<'grid' | 'list'>('grid')
 const typeFilter = ref('')
   const uploads = ref<Array<{ name: string; progress: number; error: boolean }>>([])
@@ -165,21 +168,28 @@ const listColumns = computed<DataTableColumns<Asset>>(() => [
 let visionTimer:ReturnType<typeof setInterval>|undefined
 function changeType() {
   categoryFilter.value=null
-  loadAssets()
+  changeFilter()
 }
+function changeFilter() { page.value = 1; loadAssets() }
 onMounted(() => { loadAssets(); visionTimer=setInterval(()=>{if(assets.value.some(a=>['pending','running'].includes(a.metadata?.vision_analysis?.status||'')))loadAssets()},3000) })
 onUnmounted(()=>{if(visionTimer)clearInterval(visionTimer)})
 
 async function loadAssets() {
+  const request = ++requestVersion
   loading.value = true
   try {
-    const params = { ...(typeFilter.value ? { type: typeFilter.value } : {}), ...(categoryFilter.value ? {category:categoryFilter.value}:{}), ...(search.value.trim()?{q:search.value.trim()}:{}) }
+    const params = { page: page.value, limit: pageSize, ...(typeFilter.value ? { type: typeFilter.value } : {}), ...(categoryFilter.value ? {category:categoryFilter.value}:{}), ...(search.value.trim()?{q:search.value.trim()}:{}) }
     const res = await assetsApi.list(companyId.value, params)
+    if (request !== requestVersion) return
+    total.value = res.total
+    if (page.value > Math.max(1, Math.ceil(res.total / pageSize))) { page.value = Math.max(1, Math.ceil(res.total / pageSize)); await loadAssets(); return }
     assets.value = res.data
   } catch {
+    if (request !== requestVersion) return
     assets.value = []
+    message.error('素材列表加载失败，请重试。')
   } finally {
-    loading.value = false
+    if (request === requestVersion) loading.value = false
   }
 }
 function editAsset(asset:Asset){editingAsset.value=asset;editCategory.value=asset.category||null;editTags.value=(asset.tags||[]).join(',');editDescription.value=asset.source_description||asset.metadata?.vision_analysis?.visual_description||'';showEdit.value=true}
@@ -205,6 +215,7 @@ async function handleUpload(files: File[]) {
     typeFilter.value=uploadedTypes.size===1?[...uploadedTypes][0]:''
     categoryFilter.value=null
     search.value=''
+    page.value=1
   }
   await loadAssets()
   setTimeout(() => { uploads.value = [] }, 2000)
@@ -220,7 +231,7 @@ async function confirmDelete() {
   deleteLoading.value = true
   try {
     await assetsApi.delete(companyId.value, assetToDelete.value.id)
-    assets.value = assets.value.filter((a) => a.id !== assetToDelete.value!.id)
+    await loadAssets()
     showDeleteDialog.value = false
   } finally {
     deleteLoading.value = false
@@ -243,6 +254,7 @@ function formatBytes(bytes: number) {
 .asset-filters > :first-child { min-width:min(280px,100%); flex:1; }
 .asset-filters > :nth-child(2) { width:220px; }
 .vision-hint { color:var(--text-secondary); font-size:13px; margin-top:12px; }
+.pagination-row { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-top:16px; color:var(--text-secondary); }
 
 .assets-grid {
   display: grid;

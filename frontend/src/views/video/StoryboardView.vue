@@ -72,6 +72,7 @@
                 <p class="shot-card__text">{{ shot.visual_description }}</p>
               </div>
               <p v-if="shot.purpose">{{ shot.purpose }} · {{ shot.framing }} · {{ shot.camera_movement }}</p>
+              <p v-for="(subshot, index) in shot.subshots" :key="index" class="shot-card__text">段内镜头 {{ index + 1 }} · {{ subshot.duration_seconds }}秒 · {{ subshot.description }}</p>
               <div v-if="shot.voiceover_text">
                 <p class="shot-card__label">{{ t('Voiceover') }}</p>
                 <p class="shot-card__text shot-card__text--muted">{{ shot.voiceover_text }}</p>

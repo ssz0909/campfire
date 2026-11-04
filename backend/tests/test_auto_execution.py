@@ -35,7 +35,9 @@ def test_inherits_with_and_without_loop(db):
     root.input_params = {**root.input_params, 'auto_execute':True}
     assert child_params(root)['auto_execute'] is True
     root.input_params = {'auto_execute':True}
-    assert child_params(root) == {'auto_execute':True}
+    assert child_params(root) == {'auto_execute':True, 'generation_mode':'quality', 'reuse_policy':'fresh'}
+    root.input_params = {'auto_execute':True, 'generation_mode':'cost', 'reuse_policy':'reuse_only'}
+    assert child_params(root) == root.input_params
     root.input_params = {'auto_execute':'false'}
     assert child_params(root)['auto_execute'] is False
 

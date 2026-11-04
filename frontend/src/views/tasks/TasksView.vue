@@ -10,7 +10,7 @@
     </AppPageHeader>
 
     <!-- Status filter tabs -->
-    <n-tabs v-model:value="activeTab" type="segment" class="task-tabs" @update:value="loadTasks">
+    <n-tabs v-model:value="activeTab" type="segment" class="task-tabs" @update:value="changeFilter">
       <n-tab name="all">{{ t('All') }}</n-tab>
       <n-tab name="schedules">定时计划</n-tab>
       <n-tab name="running">{{ t('Running') }}</n-tab>
@@ -48,6 +48,7 @@
           :row-props="rowProps"
         />
       </template>
+      <div v-if="total > 0" class="pagination-row"><span>共 {{ total }} 条</span><n-pagination v-if="total > pageSize" v-model:page="page" :page-size="pageSize" :item-count="total" @update:page="loadTasks" /></div>
     </AppCard>
   </div>
 </template>
@@ -56,7 +57,7 @@
 import { ref, computed, onMounted, h } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
-import { NButton, NTabs, NTab, NDataTable, type DataTableColumns } from 'naive-ui'
+import { NButton, NTabs, NTab, NDataTable, NPagination, type DataTableColumns } from 'naive-ui'
 import { AddOutline, FlashOutline, RefreshOutline, CloseOutline } from '@vicons/ionicons5'
 import AppPageHeader from '@/components/common/AppPageHeader.vue'
 import AppCard from '@/components/common/AppCard.vue'
@@ -76,6 +77,8 @@ const activeTab = ref('all')
 const loading = ref(false)
 const tasks = ref<OperationTask[]>([])
 const error = ref('')
+const page = ref(1), total = ref(0), pageSize = 20
+let requestVersion = 0
 
 const columns = computed<DataTableColumns<OperationTask>>(() => [
   {
@@ -157,19 +160,25 @@ function rowProps(row: OperationTask) {
 }
 
 onMounted(() => loadTasks())
+function changeFilter() { page.value = 1; loadTasks() }
 
 async function loadTasks() {
+  const request = ++requestVersion
   loading.value = true
   error.value = ''
   try {
-    const params = activeTab.value !== 'all' ? { status: activeTab.value } : {}
+    const params = { page: page.value, limit: pageSize, ...(activeTab.value !== 'all' ? { status: activeTab.value } : {}) }
     const res = await tasksApi.list(companyId.value, params)
+    if (request !== requestVersion) return
+    total.value = res.total
+    if (page.value > Math.max(1, Math.ceil(res.total / pageSize))) { page.value = Math.max(1, Math.ceil(res.total / pageSize)); await loadTasks(); return }
     tasks.value = res.data
   } catch {
+    if (request !== requestVersion) return
     tasks.value = []
     error.value = '任务列表加载失败，请刷新重试。'
   } finally {
-    loading.value = false
+    if (request === requestVersion) loading.value = false
   }
 }
 
@@ -195,4 +204,5 @@ async function cancelTask(task: OperationTask) {
 .task-tabs {
   margin-bottom: 0;
 }
+.pagination-row { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-top:16px; color:var(--text-secondary); }
 </style>

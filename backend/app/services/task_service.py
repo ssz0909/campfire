@@ -42,6 +42,10 @@ class TaskService:
             if parent.status != "completed":
                 raise HTTPException(status_code=400, detail="只能引用已经审批完成的任务")
         from app.services.execution_loop import configure
+        if (data.input_params or {}).get('reuse_policy', 'fresh') not in ('fresh', 'prefer_reuse', 'reuse_only'):
+            raise HTTPException(422, '素材使用策略无效')
+        if (data.input_params or {}).get('generation_mode', 'quality') not in ('quality', 'cost'):
+            raise HTTPException(422, '视频生成策略仅支持质量优先或成本优先')
         params = configure(data.input_params, (data.input_params or {}).get('goal') or data.title)
         params['auto_execute'] = data.auto_execute
         if data.auto_execute:

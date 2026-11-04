@@ -84,6 +84,16 @@ class OperationsWorkflow:
             video_duration=target_duration(task.input_params, (task.input_params or {}).get('execution_goal') or goal)
             sources['selected_assets']=[{'id':str(a.id),'name':a.name,'category':a.category,'tags':a.tags or [],
                 'width':a.width,'height':a.height, 'description':((a.asset_metadata or {}).get('vision_analysis') or {}).get('visual_description') or a.source_description} for a in selected_assets]
+            if (task.input_params or {}).get('reuse_policy', 'fresh') != 'fresh':
+                from types import SimpleNamespace
+                from app.services.video_clip_library import approved_candidates
+                selected_ids = {str(a.id) for a in selected_assets}
+                sources['reusable_clips'] = [
+                    {'id':str(a.id), 'description':a.source_description, 'duration_seconds':float(a.duration_seconds or 0),
+                     'contract':a.asset_metadata['clip_library']['contract'],
+                     'usage_count':a.asset_metadata['clip_library'].get('usage_count',0)}
+                    for a in approved_candidates(db,SimpleNamespace(company_id=company_id))
+                    if a.asset_metadata['clip_library'].get('contract',{}).get('source_asset_id') in selected_ids][:40]
         feedback_id = (task.input_params or {}).get('feedback_publish_job_id')
         if feedback_id:
             import uuid
@@ -136,8 +146,8 @@ class OperationsWorkflow:
         elif role == "video_producer":
             sections += [
                 {"title": "视频制作方案", "content": f"目标：{goal}\n受众：{audience}\n规格：竖屏9:16，15至60秒成片，每镜1.5至3.5秒，按叙事选材，模型片段剪取后合成；字幕需人工复核。\n本次交付为视频模型脚本与分镜，审批后调用视频模型生成文件。"},
-                {"title": "脚本与分镜", "content": f"每个成片镜头1.5至3.5秒｜以已授权酒店环境图作为首帧｜自然推进或横移，保持主体完整并延续真实光线｜{company.name}酒店环境与入住场景｜结尾引导了解更多、咨询入住。不得虚构酒店设施、房型或价格。"},
-                {"title": "素材与制作检查", "content": "\n".join(f"可选素材：{a.name}" for a in assets[:10]) or "请上传环境、房型及服务细节素材；确认授权、价格和字幕后，在视频项目中制作。"},
+                {"title": "脚本与分镜", "content": f"每个成片镜头1.5至3.5秒｜以已授权图片素材作为首帧｜自然推进或横移，保持主体完整并延续真实光线｜围绕任务主题展示{company.name}相关主体、产品或场景｜结尾引导了解更多、进一步了解。不得虚构人物、产品功能、设施或价格。"},
+                {"title": "素材与制作检查", "content": "\n".join(f"可选素材：{a.name}" for a in assets[:10]) or "请上传与任务主题相关的主体、产品、场景及细节素材；确认授权、价格和字幕后，在视频项目中制作。"},
             ]
             if selected_assets:
                 sections.append({'title':'已选素材与镜头顺序','content':'\n'.join(
@@ -168,7 +178,11 @@ class OperationsWorkflow:
         local_storyboard=[]
         if role=='video_producer' and selected_assets:
             from app.services.video_director import fallback_plan
-            local_storyboard=fallback_plan(sources['selected_assets'],video_duration)
+            if (task.input_params or {}).get('generation_mode') == 'cost':
+                from app.services.video_cost_plan import cost_plan
+                local_storyboard=cost_plan(sources['selected_assets'],video_duration)
+            else:
+                local_storyboard=fallback_plan(sources['selected_assets'],video_duration)
             sections.append({'title':'结构化分镜草稿','content':'\n'.join(
                 f"镜头{s['shot_number']}｜{s['duration_seconds']:.2f}秒｜{s['purpose']}｜{s['framing']}｜{s['camera_movement']}｜素材{s['source_asset_id']}" for s in local_storyboard) + f'\n按每镜5秒生成，预计{len(local_storyboard)}个模型片段，成片按分镜剪取。'})
         report = "\n\n".join(f"## {s['title']}\n{s['content']}" for s in sections)
@@ -187,7 +201,7 @@ class OperationsWorkflow:
             from datetime import datetime, timezone
             employee.last_executed_at = datetime.now(timezone.utc)
         return {"title": task.title, "mode": "local_rules", "mode_label": "本地规则草稿（未调用大模型）",
-                **({'video_storyboard':local_storyboard,'video_brief': {'target_duration_seconds':video_duration,'aspect_ratio':'9:16'}, 'selected_asset_ids':[str(a.id) for a in selected_assets]} if role=='video_producer' else {}),
+                **({'video_storyboard':local_storyboard,'video_brief': {'target_duration_seconds':video_duration,'aspect_ratio':'9:16','generation_mode':(task.input_params or {}).get('generation_mode','quality'),'reuse_policy':(task.input_params or {}).get('reuse_policy','fresh')}, 'selected_asset_ids':[str(a.id) for a in selected_assets]} if role=='video_producer' else {}),
                 "employee_name": employee.name if employee else "运营工作流", "role": role,
                 "sections": sections, "report_markdown": report, "data_sources": sources,
                 "data_gaps": gaps, "next_actions": next_actions,

@@ -10,7 +10,7 @@
       <p>已发布 {{ data.published_works }} 条作品 · 已获取播放量 {{ data.synced_works }} 条 · 待获取 {{ data.published_works-data.synced_works }} 条</p>
       <div class="work-totals"><span v-for="key in keys" :key="key">{{ metricNames[key] }}：<strong>{{ number(data.totals[key]) }}</strong></span></div>
       <p v-for="row in data.platforms" :key="row.platform" class="work-note">{{ row.platform === 'douyin' ? '抖音' : '视频号' }}：已发布 {{ row.published }} 条 · 已获取 {{ row.synced }} 条 · 播放量 {{ number(row.views) }}</p>
-      <p class="work-note">{{ data.note }}</p>
+      <p class="work-note">{{ data.note }} 通过平台 Web 接口采集，后台不会为数据同步自动启动浏览器。</p>
       <div class="work-accounts"><p v-for="account in data.accounts.filter(a => a.status)" :key="account.account_id">{{ account.label }}：{{ labels[account.status!] || account.status }} {{ account.message || '' }} <span v-if="account.completed_at">· {{ new Date(account.completed_at).toLocaleString() }}</span></p></div>
       <n-data-table :columns="columns" :data="data.items" :bordered="false" :scroll-x="1100" size="small" />
       <n-pagination v-if="data.total>20" v-model:page="page" :page-size="20" :item-count="data.total" @update:page="load" style="margin-top:16px" />
@@ -32,7 +32,7 @@ const data=ref<WorkMetricsSummary|null>(null),loading=ref(false),syncing=ref(fal
 const platformOptions=[{label:'抖音',value:'douyin'},{label:'视频号',value:'wechat_channels'}]
 const keys=['views','likes','comments','shares'] as const
 const metricNames={views:'已采集播放量',likes:'点赞',comments:'评论',shares:'分享'}
-const labels:Record<string,string>={synced:'已采集',not_synced:'待采集',unmatched:'待匹配作品',queued:'等待采集',running:'采集中',failed:'采集失败',login_required:'需重新登录'}
+const labels:Record<string,string>={synced:'已采集',partial:'部分作品已采集',metrics_unavailable:'平台暂未提供作品数据',identity_unavailable:'账号身份读取暂不可用',identity_mismatch:'账号身份不匹配',api_setup_required:'需准备接口会话',api_unavailable:'平台接口暂不可用',rate_limited:'平台请求频率受限',not_synced:'待采集',unmatched:'待匹配作品',queued:'等待采集',running:'采集中',failed:'采集失败',login_required:'需重新登录'}
 const number=(value:number|null|undefined)=>value==null?'—':value.toLocaleString()
 const columns:DataTableColumns<WorkMetricRow>=[
  {title:'作品 / 任务',key:'title',width:260,render:row=>h('div',[h('div',row.title),row.task_id?h(NButton,{text:true,onClick:()=>router.push(`/tasks/${row.task_id}`)},()=>row.task_title||'查看任务'):null])},

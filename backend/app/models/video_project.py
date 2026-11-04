@@ -25,6 +25,8 @@ class VideoProject(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     # prompt_to_video | reference_inspired_video
     creation_mode: Mapped[str] = mapped_column(String(50), nullable=False)
+    generation_mode: Mapped[str] = mapped_column(String(20), default='quality', server_default='quality', nullable=False)
+    reuse_policy: Mapped[str] = mapped_column(String(20), default='fresh', server_default='fresh', nullable=False)
     marketing_goal: Mapped[str | None] = mapped_column(Text, nullable=True)
     target_audience: Mapped[str | None] = mapped_column(Text, nullable=True)
     product_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -92,6 +94,7 @@ class ProviderTask(UUIDMixin, TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
     input_params: Mapped[dict | None] = mapped_column("input_params", nullable=True)
     output_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    raw_asset_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey('assets.id'), nullable=True)
     duration_seconds: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
     cost_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)

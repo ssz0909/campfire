@@ -1,5 +1,5 @@
 import apiClient from './client'
-export interface PublishingPlatform { id?: string; label?: string; platform: string; name: string; status: string; account_name?: string; configured: boolean; session_saved?: boolean }
+export interface PublishingPlatform { id?: string; label?: string; platform: string; name: string; status: string; account_name?: string; configured: boolean; session_saved?: boolean; status_message?: string; publish_ready?: boolean }
 export interface PublishJob { id: string; platform_connection_id: string; title: string; description?: string; media_url?: string; status: string; provider_url?: string; error_message?: string; metrics?: Record<string, unknown>; content_snapshot?: {location_name?: string; account_label?: string; platform?: string} }
 export const publishingApi = {
   async accounts(companyId: string) {

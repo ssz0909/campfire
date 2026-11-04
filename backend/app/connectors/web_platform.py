@@ -40,9 +40,19 @@ def _saved_path(company_id, platform):
 def _save_session(company_id, platform, session):
     from app.core.secrets import encrypt_json
     try:
+        # Captured read-only templates are independent of the 60s cookie-save
+        # throttle: a user may open work management after logging in.
+        try:
+            from app.connectors.web_metrics_api import save_capture
+            save_capture(_profile_dir(company_id, platform), platform, session)
+        except Exception as exc:
+            logger.warning('Could not save %s metrics API configuration (%s)', platform, type(exc).__name__)
         # storage_state() visits every previously seen origin in a temporary
         # page. Never use it while polling a visible login browser.
-        if session.get('session_saved') and time.monotonic() - session.get('saved_at', 0) < 60:
+        identity = session.get('account_identity') or {}
+        signature = (identity.get('account_fingerprint'), identity.get('legacy_account_fingerprint'))
+        if (session.get('session_saved') and signature == session.get('saved_identity_signature')
+                and time.monotonic() - session.get('saved_at', 0) < 60):
             return True
         origins = {}
         expected_host = urlparse(PLATFORM_URLS[platform]).hostname
@@ -55,12 +65,15 @@ def _save_session(company_id, platform, session):
                 snapshot = frame.evaluate('() => ({origin: location.origin, localStorage: Object.entries(localStorage).map(([name, value]) => ({name, value}))})')
                 origins[snapshot['origin']] = snapshot
         state = {'cookies': session['context'].cookies(), 'origins': list(origins.values())}
+        if identity.get('identity_verified'):
+            state['account_identity'] = identity
         path = _saved_path(company_id, platform)
         temporary = path.with_suffix('.tmp')
         temporary.write_text(encrypt_json(state))
         temporary.chmod(0o600)
         temporary.replace(path)
         session['saved_at'] = time.monotonic()
+        session['saved_identity_signature'] = signature
         return True
     except Exception as exc:
         logger.warning('Could not save %s browser session (%s)', platform, type(exc).__name__)
@@ -81,7 +94,10 @@ def _saved_status(company_id, platform):
     except OSError:
         saved = {}
     if saved and (platform != 'wechat_channels' or _saved_state_has_auth(saved, platform)):
+        identity = saved.get('account_identity') or {}
         return {'status': 'session_saved', 'login_required': False, 'browser_open': False,
+                'session_saved': True, 'publish_ready': bool(identity.get('identity_verified')),
+                **identity,
                 'message': '登录会话已保存，窗口已关闭；重新打开或发布时将校验平台登录是否过期'}
     if saved and platform == 'wechat_channels':
         path.unlink(missing_ok=True)
@@ -174,17 +190,58 @@ def _get_session(company_id, platform):
     with _lock:
         return _profiles.get(key)
 
-def _account_fingerprint(context, page, platform):
-    """Return a non-secret stable identity hash when the platform exposes one."""
+def _identity_digest(platform, value, prefix='webuidsha256:'):
     import hashlib
+    return prefix + hashlib.sha256((platform + ':' + value).encode()).hexdigest()
+
+
+def _douyin_account_identity(payload):
+    """Bind the authenticated self endpoint's UID, never rotating login cookies."""
+    if not isinstance(payload, dict) or payload.get('status_code') != 0:
+        return {}
+    user = payload.get('user')
+    if not isinstance(user, dict):
+        return {}
+    uid = user.get('uid')
+    if isinstance(uid, bool) or not isinstance(uid, (str, int)) or not re.fullmatch(r'[1-9][0-9]{0,39}', str(uid)):
+        return {}
+    return {'account_fingerprint': _identity_digest('douyin', str(uid)),
+            'account_name': str(user.get('nickname') or '')[:255], 'identity_verified': True}
+
+
+def _account_identity(context, page, platform, session):
     try:
         if platform == 'wechat_channels':
             value = page.evaluate("() => localStorage.getItem('finder_username') || ''")
-        else:
-            value = next((c['value'] for c in context.cookies() if c['name'] == 'uid_tt' and c.get('value')), '')
-        return 'websha256:' + hashlib.sha256((platform + ':' + value).encode()).hexdigest() if value else None
+            return {'account_fingerprint': _identity_digest(platform, value, 'websha256:'),
+                    'identity_verified': True} if value else {}
+        cookies = context.cookies()
+        value = next((c['value'] for c in cookies if c['name'] == 'uid_tt' and c.get('value')), '')
+        legacy = _identity_digest(platform, value, 'websha256:') if value else None
+        cached = session.get('account_identity') or {}
+        if (cached.get('identity_verified') and cached.get('legacy_account_fingerprint') == legacy
+                and time.monotonic() - session.get('identity_checked_at', 0) < 60):
+            return cached
+        # The API request shares this account's isolated browser cookie jar.
+        response = context.request.get('https://creator.douyin.com/web/api/media/user/info/', timeout=10000)
+        identity = _douyin_account_identity(response.json()) if response.ok else {}
+        if identity:
+            identity['legacy_account_fingerprint'] = legacy
+            session['identity_checked_at'] = time.monotonic()
+            return identity
     except Exception:
-        return None
+        pass
+    return {}
+
+
+def _account_matches(state, expected):
+    if not expected:
+        return True
+    if state.get('account_fingerprint') == expected:
+        return True
+    return bool(expected.startswith('websha256:') and state.get('identity_verified')
+                and state.get('legacy_account_fingerprint') == expected
+                and str(state.get('account_fingerprint', '')).startswith('webuidsha256:'))
 
 
 def _release_idle_accounts(company_id, platform):
@@ -211,6 +268,8 @@ def _watch_browser_session(context, page, platform, session):
         session['page_crashed'] = True
         logger.warning('Platform browser page crashed: platform=%s', platform)
     page.on('crash', crashed)
+    from app.connectors.web_metrics_api import observe_request
+    context.on('response', lambda response: observe_request(response, platform, session))
 
 def _browser_launch_options():
     executable = getattr(settings, 'WEB_BROWSER_EXECUTABLE', '')
@@ -352,14 +411,17 @@ def session_status(company_id, platform):
             authorized = _saved_state_has_auth(state, platform)
         if authorized:
             session.pop('navigation_error', None)
+            session['account_identity'] = _account_identity(session['context'], page, platform, session)
             session['authenticated'] = True
             session['session_saved'] = _save_session(company_id, platform, session)
         elif login:
             session['authenticated'] = False
+            session.pop('account_identity', None)
             _saved_path(company_id, platform).unlink(missing_ok=True)
         return {"status": "authorized" if authorized else "login_required", "login_required": not authorized, "url": page.url,
                 'session_saved': bool(authorized and session.get('session_saved')), 'browser_open': True,
-                'account_fingerprint': _account_fingerprint(session['context'], page, platform) if authorized else None,
+                **(session.get('account_identity') or {} if authorized else {}),
+                'publish_ready': bool(authorized and (session.get('account_identity') or {}).get('identity_verified')),
                 'message': ('平台网页登录成功，登录会话已保存' if session.get('session_saved') else '平台网页登录成功，但会话保存失败，请暂勿关闭窗口') if authorized else ('平台页面加载失败，请检查本机网络或代理，恢复后刷新已打开的窗口' if session.get('navigation_error') else '请在平台窗口完成扫码登录')}
     except Exception as exc:
         # A slow provider page is still an open login session. Do not downgrade
@@ -367,16 +429,55 @@ def session_status(company_id, platform):
         return {"status": "login_required", "login_required": True, "url": page.url,
                 "message": f"平台页面仍在加载，请稍后重试：{type(exc).__name__}"}
 
+def _wait_for_account_ready(company_id, platform, session, expected_account_id=None, timeout_ms=15000,
+                            status_reader=None):
+    """Wait for the restored SPA and a fresh identity before any upload/read."""
+    page = session['page']
+    deadline = time.monotonic() + timeout_ms / 1000
+    session.pop('identity_checked_at', None)
+    try:
+        page.wait_for_function("() => /作品管理|内容管理|发布视频|发布作品|数据中心|创作者中心|视频号ID|扫码登录|验证码登录/.test(document.body?.innerText || '')",
+            timeout=max(1, timeout_ms))
+    except Exception:
+        pass  # Report the actual status below, including a page that never finishes loading.
+    attempts = max(1, timeout_ms // 500 + 1)
+    for attempt in range(attempts):
+        state = status_reader() if status_reader else session_status(company_id, platform)
+        if state.get('account_fingerprint') and not _account_matches(state, expected_account_id):
+            return {**state, 'status':'login_required', 'login_required':True,
+                'publish_ready':False, 'identity_mismatch':True,
+                'message':'当前登录账号与已绑定账号不一致，请退出并重新登录原账号'}
+        if not state.get('login_required', True) and _account_matches(state, expected_account_id):
+            return state
+        try:
+            body = _page_text(page)
+            if state.get('login_required') and any(label in body for label in (
+                    '扫码登录', '验证码登录', '登录后使用', '登录/注册', '扫码进入', '立即登录')):
+                return {**state, 'status':'login_required', 'login_required':True,
+                    'message':'平台登录已失效，请在打开的浏览器窗口完成扫码登录'}
+        except Exception:
+            pass
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or attempt == attempts - 1:
+            break
+        try:
+            page.wait_for_timeout(min(500, remaining * 1000))
+        except Exception:
+            break
+    return {**state, 'status':'login_required', 'login_required':True,
+        'publish_ready':False, 'identity_unavailable':True,
+        'message':'平台页面尚未加载完成或暂时无法读取账号身份，未开始上传或提交；请稍后重试，无需退出账号'}
+
+
 @browser_operation
 def publish(company_id, platform, title, description, media_url, location_name=None, geolocation=None, expected_account_id=None):
     _ensure_open(company_id, platform)
     session = _get_session(company_id, platform)
     if not session: return {"status": "login_required", "message": "请先打开平台 Web 登录窗口并完成扫码登录"}
     page = session["page"]
-    state = session_status(company_id, platform)
-    if expected_account_id and state.get('account_fingerprint') != expected_account_id:
-        return {'status':'login_required', 'message':'登录账号与已绑定账号不一致或身份无法确认，请退出并重新登录原账号'}
-    if state["login_required"]: return state | {"message": "请在打开的浏览器窗口完成扫码登录"}
+    state = _wait_for_account_ready(company_id, platform, session, expected_account_id)
+    if state.get('login_required', True):
+        return {**state, 'status':'manual_required'} if state.get('identity_unavailable') else state
     stage = '打开上传页'
     submit_attempted = False
     try:
@@ -1058,10 +1159,8 @@ def read_metrics(company_id, platform, expected_account_id=None):
     _ensure_open(company_id, platform)
     session = _get_session(company_id, platform)
     if not session: return {"status": "login_required", "metrics": {}}
-    state = session_status(company_id, platform)
-    if expected_account_id and state.get('account_fingerprint') != expected_account_id:
-        return {'status':'login_required', 'metrics':{}, 'message':'登录身份与已绑定账号不一致，未读取其他账号数据'}
-    if state["login_required"]: return {"status": "login_required", "metrics": {}}
+    state = _wait_for_account_ready(company_id, platform, session, expected_account_id)
+    if state.get('login_required', True): return {**state, 'metrics':{}}
     page = session['page']
     try:
         # Only follow a link actually present in the authenticated provider UI.
@@ -1136,6 +1235,76 @@ def shutdown_sessions():
 
 
 @browser_operation
+def login_diagnostics(company_id, platform):
+    """Read structural input diagnostics only; omit text, URLs and credentials."""
+    if platform not in PLATFORM_URLS:
+        raise ValueError('unsupported platform')
+    session = _get_session(company_id, platform)
+    if not session or session.get('page_crashed') or session['page'].is_closed():
+        raise RuntimeError('登录窗口已关闭，请重新打开网页登录')
+    page = session['page']
+    result = {'pages':len(session['context'].pages), 'frames':[],
+              'last_click':session.get('last_login_click')}
+    for frame in page.frames[:12]:
+        try:
+            structure = frame.evaluate('''() => {
+                function describe(el) {
+                    const r = el.getBoundingClientRect(), s = getComputedStyle(el);
+                    const propsKey = Object.keys(el).find(k => k.startsWith('__reactProps$'));
+                    const props = propsKey ? el[propsKey] : {};
+                    return {tag:el.tagName, classes:String(el.className||'').slice(0,160),
+                        rect:{x:r.x,y:r.y,width:r.width,height:r.height}, pointerEvents:s.pointerEvents,
+                        handlers:Object.keys(props||{}).filter(k=>/^on(Click|Mouse|Pointer|Touch)/.test(k)),
+                        nativeHandlers:['onclick','onmousedown','onmouseup','ontouchstart','ontouchend'].filter(k=>typeof el[k]==='function')};
+                }
+                const controls = [...document.querySelectorAll('button,[role="button"],iframe')]
+                    .filter(el=>{const r=el.getBoundingClientRect();return r.width>0&&r.height>0}).slice(0,40).map(describe);
+                const hits = [[720,490],[1042,278]].map(([x,y])=>({x,y,stack:document.elementsFromPoint(x,y).slice(0,8).map(describe)}));
+                return {viewport:{width:innerWidth,height:innerHeight},ready:document.readyState,
+                    focused:document.hasFocus(),touchPoints:navigator.maxTouchPoints,
+                    touchAPI:'ontouchstart' in window,verification:document.body?.innerText.includes('身份验证'),
+                    controls,hits};
+            }''')
+            result['frames'].append({'host':urlparse(frame.url).hostname,**structure})
+        except Exception as exc:
+            result['frames'].append({'error':type(exc).__name__})
+    return result
+
+
+def _click_login_point(page, x, y):
+    """Forward one user activation, including creator portal verification layers.
+
+    Some portal overlays render normally while Chromium's native mouse input
+    does not reach their React root. Activate only the clickable ancestor at
+    the user's point in that visible overlay. Never choose a method by text,
+    invoke private handlers, complete verification or retry a delivered click.
+    """
+    activated = page.evaluate('''({x,y}) => {
+        const hit = document.elementFromPoint(x,y);
+        const panel = hit?.closest('[class*="second_verify_panel"]');
+        if (!panel) return false;
+        for (let el=hit; el && panel.contains(el); el=el.parentElement) {
+            if (!(el instanceof HTMLElement)) continue;
+            const propsKey=Object.keys(el).find(k=>k.startsWith('__reactProps$'));
+            const props=propsKey?el[propsKey]:null;
+            if (typeof props?.onClick!=='function' && !el.matches('button,a[href],[role="button"]')) continue;
+            if(el.matches(':disabled,[aria-disabled="true"]') || el.closest('[inert]')) return 'disabled';
+            // Use the normal DOM activation/bubbling path, not React internals.
+            el.click();
+            return true;
+        }
+        return false;
+    }''', {'x':x,'y':y})
+    if activated is True:
+        return 'element'
+    if activated == 'disabled':
+        raise RuntimeError('该验证控件暂不可用，请等待平台提示后再操作')
+    page.mouse.move(x,y)
+    page.mouse.click(x,y,delay=80)
+    return 'pointer'
+
+
+@browser_operation
 def login_view(company_id, platform, action=None):
     """Company-scoped remote login view; never expose cookies or arbitrary URLs."""
     if platform not in PLATFORM_URLS:
@@ -1147,10 +1316,8 @@ def login_view(company_id, platform, action=None):
     if action:
         kind = action['kind']
         if kind == 'click':
-            # Preserve a normal pointer sequence for provider verification widgets.
-            # Only forward the user's chosen coordinates; never select a challenge.
-            page.mouse.move(action['x'], action['y'])
-            page.mouse.click(action['x'], action['y'], delay=80)
+            session['last_login_click'] = {'x':action['x'],'y':action['y'],
+                'delivery':_click_login_point(page,action['x'],action['y'])}
         elif kind == 'drag':
             page.mouse.move(action['x'], action['y'])
             page.mouse.down()
@@ -1215,99 +1382,191 @@ def login_view(company_id, platform, action=None):
             'width': viewport['width'], 'height': viewport['height'], 'input_focused': input_focused, 'input_field': input_field}
 
 
+def _metrics_page_status(platform, session):
+    """Verify the isolated read tab, not the user's editor or stale home tab."""
+    page = session['page']
+    try:
+        body = _page_text(page)
+        login = any(label in body for label in ('扫码登录', '验证码登录', '登录后使用', '登录/注册', '扫码进入', '立即登录'))
+        recognised = any(label in body for label in ('作品管理', '内容管理', '发布视频', '发布作品',
+            '数据中心', '创作者中心', '视频号ID', '最近视频', '发表视频'))
+        host_matches = urlparse(page.url).hostname == urlparse(PLATFORM_URLS[platform]).hostname
+        identity = _account_identity(session['context'], page, platform, session) if host_matches and not login else {}
+        authorized = bool(host_matches and recognised and not login and identity.get('identity_verified'))
+        return {**identity, 'status':'authorized' if authorized else 'login_required',
+            'login_required':not authorized, 'publish_ready':authorized}
+    except Exception:
+        return {'status':'login_required', 'login_required':True, 'publish_ready':False}
+
+
 @browser_operation
 def read_work_metrics(company_id, platform, targets, expected_account_id=None):
-    """Read creator lists in a separate tab; never touch an upload/editor tab."""
+    """Verify and scan a read-only tab in the selected account's own context."""
     from app.connectors.work_metrics import extract_records, match_records
     _ensure_open(company_id, platform)
     session = _get_session(company_id, platform)
     if not session:
-        return {'status':'login_required','items':{},'message':'平台登录已失效，请重新登录'}
-    try:
-        session['page'].wait_for_function("() => /作品管理|内容管理|发布视频|发布作品|数据中心|创作者中心|视频号ID|扫码登录|验证码登录/.test(document.body?.innerText || '')", timeout=15000)
-    except Exception: pass
-    state = session_status(company_id, platform)
-    for _ in range(20):
-        if not state.get('login_required'): break
-        if any(label in _page_text(session['page']) for label in ('扫码登录','验证码登录')): break
-        session['page'].wait_for_timeout(500)
-        state = session_status(company_id, platform)
-    if state.get('login_required') or (expected_account_id and state.get('account_fingerprint') != expected_account_id):
-        return {'status':'login_required','items':{},'message':'登录已失效或账号身份不一致，请重新登录对应账号'}
+        return {'status':'login_required','items':{},'message':'请先在发布平台打开对应账号的网页登录'}
     page = session['context'].new_page()
-    records, seen_pages = [], set()
+    probe = {**session, 'page':page}
+    records, observed_ids = [], set()
     complete = False
+    seen_response = False
+    request_template = None
+    last_cursor = None
     expected_total = None
+    has_more = None
+
+    def collect(payload):
+        nonlocal complete, seen_response, expected_total, has_more, last_cursor
+        if not isinstance(payload, dict) or payload.get('status_code', 0) != 0 or payload.get('errCode', 0) != 0:
+            return False
+        data = payload.get('data') if platform == 'wechat_channels' else (
+            payload if any(isinstance(payload.get(key), list) for key in ('items','aweme_list','item_list')) else payload.get('data'))
+        if not isinstance(data, dict): return False
+        lists = ('list',) if platform == 'wechat_channels' else ('items','aweme_list','item_list')
+        if not any(isinstance(data.get(key), list) for key in lists): return False
+        seen_response = True
+        for key in lists:
+            for item in (data.get(key) if isinstance(data.get(key), list) else [])[:1000]:
+                if not isinstance(item, dict): continue
+                identifier = item.get('objectId') if platform == 'wechat_channels' else (item.get('aweme_id') or item.get('id'))
+                if isinstance(identifier, (str, int)) and not isinstance(identifier, bool) and str(identifier):
+                    observed_ids.add(str(identifier))
+        records.extend(extract_records(payload, platform))
+        total = data.get('totalCount') if platform == 'wechat_channels' else data.get('total')
+        if isinstance(total, int) and not isinstance(total, bool) and total >= 0:
+            expected_total = total
+        more = data.get('continueFlag') if platform == 'wechat_channels' else data.get('has_more', data.get('hasMore'))
+        if isinstance(more, (bool, int)) and more in (True, False, 0, 1):
+            has_more = bool(more)
+        cursor = data.get('lastBuff')
+        if isinstance(cursor, str): last_cursor = cursor
+        count = len(observed_ids)
+        complete = has_more is False or (expected_total is not None and count >= expected_total)
+        return True
+
     def observe(response):
-        nonlocal expected_total
-        nonlocal complete
+        nonlocal request_template
         parsed = urlparse(response.url)
         allowed = (platform == 'wechat_channels' and parsed.hostname == 'channels.weixin.qq.com' and
                    parsed.path.endswith('/post/post_list')) or (
                    platform == 'douyin' and parsed.hostname == 'creator.douyin.com' and
                    parsed.path.rstrip('/') in ('/web/api/creator/item/list', '/janus/douyin/creator/pc/work_list'))
-        if not allowed or response.status != 200: return
+        if not allowed or not 200 <= response.status < 300: return
         try:
-            payload = response.json()
-            if payload.get('status_code', 0) != 0 or payload.get('errCode', 0) != 0: return
-            records.extend(extract_records(payload, platform))
-            if parsed.path.rstrip('/') == '/janus/douyin/creator/pc/work_list':
-                if 'has_more' in payload and payload['has_more'] in (False, 0): complete = True
-                total = payload.get('total')
-                if isinstance(total, int) and not isinstance(total,bool) and total >= 0:
-                    expected_total = max(total, expected_total or 0)
-                    if len({record['post_id'] for record in records}) >= expected_total: complete = True
-            data = payload.get('data') or {}
-            if isinstance(data, dict) and data.get('hasMore') is False: complete = True
-        except Exception: pass
+            if collect(response.json()) and platform == 'wechat_channels':
+                request_template = response.request
+        except Exception:
+            logger.warning('Could not parse %s work-list response', platform)
+
     page.on('response', observe)
     try:
-        page.goto(PLATFORM_URLS[platform], wait_until='domcontentloaded', timeout=30000)
-        page.wait_for_timeout(2500)
-        labels = ('作品管理','内容管理') if platform == 'douyin' else ('内容管理','视频')
-        for label in labels:
-            links = page.get_by_text(label, exact=True)
-            visible = [links.nth(i) for i in range(links.count()) if links.nth(i).is_visible()]
-            if len(visible) == 1:
-                visible[0].click(timeout=10000); page.wait_for_timeout(1800)
-        for _ in range(20):
-            page.wait_for_timeout(800)
-            body = _page_text(page, timeout=8000)
-            fingerprint = hash(body)
-            if fingerprint in seen_pages and complete: break
-            seen_pages.add(fingerprint)
-            next_buttons = page.locator('[aria-label="下一页"]:visible, [title="下一页"]:visible, .ant-pagination-next:visible, .semi-page-next:visible, .el-pagination .btn-next:visible')
-            if next_buttons.count() == 0:
-                exact = page.get_by_text('下一页', exact=True)
-                visible = [exact.nth(i) for i in range(exact.count()) if exact.nth(i).is_visible()]
-                button = visible[0] if len(visible) == 1 else None
-            else: button = next_buttons.first if next_buttons.count() == 1 else None
-            if button is None:
+        # A fresh tab avoids relying on the last editor/home page, while still
+        # checking the current identity against this particular account binding.
+        destination = ('https://channels.weixin.qq.com/platform' if platform == 'wechat_channels'
+                       else 'https://creator.douyin.com/creator-micro/content/manage')
+        page.goto(destination, wait_until='domcontentloaded', timeout=30000)
+        state = _wait_for_account_ready(company_id, platform, probe, expected_account_id, timeout_ms=30000,
+            status_reader=lambda: _metrics_page_status(platform, probe))
+        if state.get('login_required', True):
+            if state.get('identity_unavailable'):
+                state = {**state, 'status':'identity_unavailable',
+                    'message':'暂时无法从作品数据页面确认账号身份，请稍后重试，无需退出账号'}
+            return {**state, 'items':{}}
+        if state.get('identity_verified'):
+            session['account_identity'] = {key:state[key] for key in (
+                'account_fingerprint','legacy_account_fingerprint','identity_verified','account_name') if key in state}
+            session['authenticated'] = True
+            session['session_saved'] = _save_session(company_id, platform, session)
+            # Mark the restored context reusable/evictable. Otherwise a sync of
+            # a third account could exhaust the two-window limit after restart.
+        # Initial platform response can arrive after the dashboard shell.
+        for _ in range(30):
+            if seen_response: break
+            page.wait_for_timeout(500)
+        if not seen_response:
+            return {'status':'failed','items':{},'message':'已确认账号，但未收到平台作品列表，请稍后重试'}
+
+        if platform == 'wechat_channels':
+            # The homepage asks post_list for five videos with currentPage.
+            # Replay only this observed, authenticated read-only request; retain
+            # all provider-supplied fields and change only the page cursor.
+            try:
+                body = request_template.post_data_json if request_template else None
+                current_page = body.get('currentPage') if isinstance(body, dict) else None
+                if isinstance(current_page, bool) or not isinstance(current_page, int) or current_page < 0:
+                    body = None
+            except Exception:
+                body = None
+            if body is not None:
+                for _ in range(19):
+                    if complete or has_more is False: break
+                    previous_count = len(observed_ids)
+                    current_page += 1
+                    next_body = {**body, 'currentPage':current_page}
+                    if 'lastBuff' in body and last_cursor: next_body['lastBuff'] = last_cursor
+                    response = session['context'].request.fetch(request_template, data=next_body, timeout=20000)
+                    try:
+                        if not 200 <= response.status < 300 or not collect(response.json()): break
+                    finally:
+                        response.dispose()
+                    if len(observed_ids) == previous_count and not complete: break
+        else:
+            for _ in range(20):
                 if complete: break
-                # Douyin work management uses a scrolling list in some layouts.
-                # Scroll only; do not click cards or anything in an editor.
-                before_count = len(records)
-                page.evaluate('''() => {
-                    for (const el of [document.scrollingElement, ...document.querySelectorAll('main, section, div')]) {
-                        if (el && el.clientHeight > 200 && el.scrollHeight > el.clientHeight + 50 &&
-                            ['auto','scroll'].includes(getComputedStyle(el).overflowY)) el.scrollTop = el.scrollHeight;
-                    }
-                    window.scrollTo(0, document.body.scrollHeight);
-                }''')
-                page.mouse.wheel(0, 2000)
-                page.wait_for_timeout(1800)
-                if len(records) == before_count: break
-                continue
-            disabled = button.is_disabled() or button.get_attribute('aria-disabled') == 'true' or 'disabled' in (button.get_attribute('class') or '')
-            if disabled:
-                complete = True; break
-            button.click(timeout=10000); page.wait_for_timeout(1500)
+                page.wait_for_timeout(800)
+                next_buttons = page.locator('[aria-label="下一页"]:visible, [title="下一页"]:visible, .ant-pagination-next:visible, .semi-page-next:visible, .el-pagination .btn-next:visible')
+                if next_buttons.count() == 0:
+                    exact = page.get_by_text('下一页', exact=True)
+                    visible = [exact.nth(i) for i in range(exact.count()) if exact.nth(i).is_visible()]
+                    button = visible[0] if len(visible) == 1 else None
+                else:
+                    button = next_buttons.first if next_buttons.count() == 1 else None
+                if button is None:
+                    before_count = len(records)
+                    page.evaluate('''() => {
+                        for (const el of [document.scrollingElement, ...document.querySelectorAll('main, section, div')]) {
+                            if (el && el.clientHeight > 200 && el.scrollHeight > el.clientHeight + 50 &&
+                                ['auto','scroll'].includes(getComputedStyle(el).overflowY)) el.scrollTop = el.scrollHeight;
+                        }
+                        window.scrollTo(0, document.body.scrollHeight);
+                    }''')
+                    page.mouse.wheel(0, 2000)
+                    page.wait_for_timeout(1800)
+                    if len(records) == before_count: break
+                    continue
+                disabled = button.is_disabled() or button.get_attribute('aria-disabled') == 'true' or 'disabled' in (button.get_attribute('class') or '')
+                if disabled:
+                    complete = True; break
+                button.click(timeout=10000); page.wait_for_timeout(1500)
         if '/login' in urlparse(page.url).path or any(label in _page_text(page) for label in ('扫码登录', '验证码登录')):
             return {'status':'login_required','items':{},'message':'平台会话已过期，请重新登录对应账号'}
         items = match_records(targets, records, complete)
-        return {'status':'synced' if items else 'unmatched','items':items,
-            'message':None if len(items)==len(targets) else f'已读取 {len({record["post_id"] for record in records})} 条平台作品，列表完整：{"是" if complete else "否"}；未匹配作品请核对发布时间、文案或作品标识。'}
-    except Exception:
+        count = len(observed_ids)
+        if len(items) == len(targets):
+            message = None
+        elif not complete:
+            message = f'已读取 {count} 条平台作品，列表尚未读完整；没有作品 ID 的记录暂不能安全匹配，请稍后重试。'
+        else:
+            message = f'已读取 {count} 条平台作品，列表已读完整；未匹配的记录请核对作品是否仍在该账号及发布文案。'
+        status = 'synced' if len(items) == len(targets) else 'partial' if items else 'unmatched'
+        unmatched_messages, unmatched_statuses = {}, {}
+        for target in targets:
+            if target['job_id'] in items: continue
+            if target.get('post_id') in observed_ids:
+                unmatched_messages[target['job_id']] = '已找到作品，但平台未返回可用的作品数据；请稍后重试，保留上次采集值。'
+                unmatched_statuses[target['job_id']] = 'metrics_unavailable'
+            elif complete and target.get('post_id'):
+                unmatched_messages[target['job_id']] = '当前绑定账号的完整作品列表中未找到此作品 ID；请核对作品是否仍在该账号。保留上次采集值。'
+            elif complete:
+                unmatched_messages[target['job_id']] = '当前账号没有按文案和发布时间唯一匹配的作品；重复发布记录或平台文案变化需核对。保留上次采集值。'
+        if not items and unmatched_statuses and len(unmatched_statuses) == len(targets): status = 'metrics_unavailable'
+        return {'status':status,'items':items,'message':message,'unmatched_messages':unmatched_messages,
+                'unmatched_statuses':unmatched_statuses,
+                'record_count':count,'list_complete':complete}
+    except Exception as exc:
+        logger.warning('Could not collect %s work metrics (%s)', platform, type(exc).__name__)
         return {'status':'failed','items':{},'message':'作品数据页面加载失败，请检查平台登录或稍后重试'}
     finally:
         page.remove_listener('response', observe)

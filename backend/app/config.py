@@ -69,6 +69,7 @@ class Settings(BaseSettings):
     VIDEO_TIMEOUT_SECONDS: int = 1800
     VIDEO_RESOLUTION: str = "720P"
     VIDEO_AUDIO: bool = True
+    VIDEO_BRAND_FONT_PATH: str = ''
     PUBLIC_BASE_URL: str = ""
 
     # Hotel connector: 订单来了 (Dingdanlai) open platform

@@ -71,7 +71,9 @@ def actions_for(task, result):
 
 def child_params(parent):
     params = parent.input_params or {}
-    automation = {'auto_execute': params.get('auto_execute') is True}
+    automation = {'auto_execute': params.get('auto_execute') is True,
+                  'generation_mode': params.get('generation_mode', 'quality'),
+                  'reuse_policy': params.get('reuse_policy', 'fresh')}
     if not enabled(parent):
         return automation
     return {**automation, 'execution_loop': True, 'execution_root_id': params.get('execution_root_id', str(parent.id)),
@@ -144,15 +146,15 @@ def publication_geolocation(db, company_id):
 def publication_copy(db, project):
     from app.models.company import Company
     company = db.query(Company).filter_by(id=project.company_id).first()
-    name = project.product_name or (company.name if company else '酒店')
+    name = project.product_name or (company.name if company else '品牌')
     task = db.query(OperationTask).filter_by(id=project.task_id, company_id=project.company_id).first() if project.task_id else None
     output = task.output or {} if task else {}
-    title = (output.get('publish_title') or f'发现{name}，开启下一次入住体验').strip()[:100]
+    title = (output.get('publish_title') or f'发现{name}，了解真实亮点与体验').strip()[:100]
     description = (output.get('publish_description') or '').strip()
     if not description:
         facts = '；'.join(str(p).strip() for p in [project.video_theme, project.key_selling_points] if p)
-        description = f'走进{name}，看看这次入住的酒店环境。{facts}。' if facts else f'走进{name}，看看这次入住的酒店环境。'
-        description += project.cta_text or '欢迎关注，咨询房型与入住信息，安排下一次旅程。'
+        description = f'走进{name}，了解素材中展示的真实内容。{facts}。' if facts else f'走进{name}，了解素材中展示的真实内容。'
+        description += project.cta_text or '欢迎关注，留言了解更多相关信息。'
     if name not in description:
         description = f'{name}｜{description}'
     if name not in title:

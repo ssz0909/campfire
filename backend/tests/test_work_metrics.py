@@ -80,7 +80,7 @@ def test_sync_stores_work_snapshot_separately_and_throttles(db,monkeypatch):
     user,company,task,account,job=setup(db)
     job.metrics={'scope':'account','views':800,'feedback_state':'done'};db.commit()
     collect=Mock(return_value={'status':'synced','items':{str(job.id):{'post_id':'123','views':45,'likes':0}}})
-    monkeypatch.setattr('app.connectors.web_platform.read_work_metrics',collect)
+    monkeypatch.setattr('app.connectors.web_metrics_api.read_work_metrics',collect)
     assert request_sync(db,company.id)==[account.id]
     assert not request_sync(db,company.id)
     sync_account(db,company.id,account.id)
@@ -94,7 +94,7 @@ def test_sync_stores_work_snapshot_separately_and_throttles(db,monkeypatch):
 def test_failed_sync_preserves_last_known_counts(db,monkeypatch):
     user,company,task,account,job=setup(db)
     job.metrics={'work_metrics':{'views':55},'work_metrics_at':'2026-10-31T10:00:00+00:00'};db.commit()
-    monkeypatch.setattr('app.connectors.web_platform.read_work_metrics',lambda *args,**kwargs:{'status':'login_required','items':{},'message':'请重新登录'})
+    monkeypatch.setattr('app.connectors.web_metrics_api.read_work_metrics',lambda *args,**kwargs:{'status':'login_required','items':{},'message':'请重新登录'})
     request_sync(db,company.id);sync_account(db,company.id,account.id)
     assert job.metrics['work_metrics']['views']==55 and job.metrics['work_sync_status']=='login_required'
 
@@ -127,7 +127,7 @@ def test_dedup_uses_latest_snapshot_even_when_newest_job_not_synced(db):
 def test_sync_exception_records_failure_and_preserves_counts(db,monkeypatch):
     user,company,task,account,job=setup(db)
     job.metrics={'work_metrics':{'views':55}};db.commit()
-    monkeypatch.setattr('app.connectors.web_platform.read_work_metrics',Mock(side_effect=RuntimeError('transport failed')))
+    monkeypatch.setattr('app.connectors.web_metrics_api.read_work_metrics',Mock(side_effect=RuntimeError('transport failed')))
     from sqlalchemy.orm import Session
     request_sync(db,company.id)
     with Session(bind=db.connection(), join_transaction_mode='create_savepoint') as isolated:
@@ -146,7 +146,7 @@ def test_creator_scroll_list_collects_until_total_reached(monkeypatch):
     session={'page':Mock(),'context':context}
     monkeypatch.setattr(web,'_ensure_open',lambda *args:None)
     monkeypatch.setattr(web,'_get_session',lambda *args:session)
-    monkeypatch.setattr(web,'session_status',lambda *args:{'login_required':False})
+    monkeypatch.setattr(web,'_metrics_page_status',lambda *args:{'login_required':False})
     monkeypatch.setattr(web,'_page_text',lambda *args,**kwargs:'内容管理')
     observer={}
     page.on.side_effect=lambda event,callback:observer.update(response=callback)
@@ -169,7 +169,112 @@ def test_creator_scan_rejects_wrong_account(monkeypatch):
     session={'page':Mock(),'context':Mock()}
     monkeypatch.setattr(web,'_ensure_open',lambda *args:None)
     monkeypatch.setattr(web,'_get_session',lambda *args:session)
-    monkeypatch.setattr(web,'session_status',lambda *args:{'login_required':False,'account_fingerprint':'other'})
+    monkeypatch.setattr(web,'_metrics_page_status',lambda *args:{'login_required':False,'account_fingerprint':'other'})
     result=web.read_work_metrics.__wrapped__(uuid.uuid4(),'douyin',[],expected_account_id='expected')
     assert result['status']=='login_required'
-    session['context'].new_page.assert_not_called()
+    session['context'].new_page.return_value.close.assert_called_once()
+    session['page'].goto.assert_not_called()
+
+
+def test_channels_201_and_numbered_pages_collect_all_works_without_touching_editor(monkeypatch):
+    from app.connectors import web_platform as web
+    now=datetime.now(timezone.utc)
+    editor=Mock(url='https://channels.weixin.qq.com/platform/post/create')
+    page=Mock(url='https://channels.weixin.qq.com/platform')
+    context=Mock();context.new_page.return_value=page
+    session={'page':editor,'context':context}
+    save=Mock(return_value=True)
+    monkeypatch.setattr(web,'_save_session',save)
+    monkeypatch.setattr(web,'_ensure_open',lambda *args:None)
+    monkeypatch.setattr(web,'_get_session',lambda *args:session)
+    monkeypatch.setattr(web,'session_status',Mock(side_effect=AssertionError('must not inspect editor')))
+    monkeypatch.setattr(web,'_metrics_page_status',lambda platform,probe:{'login_required':False,'identity_verified':True,'account_fingerprint':'bound'})
+    monkeypatch.setattr(web,'_page_text',lambda *args,**kwargs:'视频号ID 内容管理')
+    observer={}
+    page.on.side_effect=lambda event,callback:observer.update(response=callback)
+    request=Mock();request.post_data_json={'currentPage':1,'pageSize':1,'rawKeyBuff':'private-test-value','scene':3}
+    def payload(identifier,more):
+        return {'errCode':0,'data':{'totalCount':2,'continueFlag':more,'list':[
+            {'objectId':identifier,'status':1,'createTime':now.timestamp(),
+             'desc':{'description':'酒店\n欢迎光临'},'readCount':25,'likeCount':0,'commentCount':2,'forwardCount':1}]}}
+    response=Mock(url='https://channels.weixin.qq.com/micro/content/cgi-bin/mmfinderassistant-bin/post/post_list',status=201)
+    response.request=request;response.json.return_value=payload('old',True)
+    page.goto.side_effect=lambda *args,**kwargs:observer['response'](response)
+    next_response=Mock(status=201);next_response.json.return_value=payload('wanted',False)
+    context.request.fetch.return_value=next_response
+    targets=[{'job_id':'a','post_id':'wanted'}]
+    result=web.read_work_metrics.__wrapped__('company','wechat_channels',targets,'bound')
+    assert result['status']=='synced' and result['list_complete'] and result['record_count']==2
+    assert result['items']['a']['views']==25
+    assert session['authenticated'] and session['session_saved']
+    save.assert_called_once()
+    context.request.fetch.assert_called_once_with(request,data={**request.post_data_json,'currentPage':2},timeout=20000)
+    assert request.post_data_json['currentPage']==1
+    editor.goto.assert_not_called();editor.close.assert_not_called()
+    page.close.assert_called_once()
+
+
+def test_channels_identity_unavailable_is_transient_not_logout(monkeypatch):
+    from app.connectors import web_platform as web
+    context=Mock();session={'page':Mock(),'context':context}
+    monkeypatch.setattr(web,'_ensure_open',lambda *args:None)
+    monkeypatch.setattr(web,'_get_session',lambda *args:session)
+    monkeypatch.setattr(web,'_wait_for_account_ready',lambda *args,**kwargs:{'status':'login_required','login_required':True,'identity_unavailable':True})
+    result=web.read_work_metrics.__wrapped__('company','wechat_channels',[],'bound')
+    assert result['status']=='identity_unavailable' and '无需退出账号' in result['message']
+    assert '上传' not in result['message']
+    context.request.fetch.assert_not_called()
+    context.new_page.return_value.close.assert_called_once()
+
+
+def test_missing_known_work_is_reported_without_overwriting_previous_values(db,monkeypatch):
+    user,company,task,account,job=setup(db)
+    job.metrics={'work_metrics':{'views':55}};db.commit()
+    result={'status':'partial','items':{},'record_count':2,'list_complete':True,
+            'message':'读取完整','unmatched_messages':{str(job.id):'当前账号未找到此作品 ID'}}
+    monkeypatch.setattr('app.connectors.web_metrics_api.read_work_metrics',lambda *args,**kwargs:result)
+    request_sync(db,company.id);sync_account(db,company.id,account.id)
+    assert job.metrics['work_metrics']['views']==55
+    assert job.metrics['work_sync_status']=='unmatched'
+    assert job.metrics['work_sync_message']=='当前账号未找到此作品 ID'
+    assert account.metrics_snapshot['work_sync']['record_count']==2
+    assert account.metrics_snapshot['work_sync']['list_complete'] is True
+
+
+def test_channels_page_cap_does_not_claim_complete_or_match_title(monkeypatch):
+    from app.connectors import web_platform as web
+    now=datetime.now(timezone.utc)
+    context=Mock();page=Mock(url='https://channels.weixin.qq.com/platform');context.new_page.return_value=page
+    monkeypatch.setattr(web,'_ensure_open',lambda *args:None)
+    monkeypatch.setattr(web,'_get_session',lambda *args:{'page':Mock(),'context':context})
+    monkeypatch.setattr(web,'_metrics_page_status',lambda *args:{'login_required':False})
+    monkeypatch.setattr(web,'_page_text',lambda *args,**kwargs:'视频号ID')
+    handler={};page.on.side_effect=lambda event,callback:handler.update(response=callback)
+    response=Mock(url='https://channels.weixin.qq.com/micro/content/cgi-bin/mmfinderassistant-bin/post/post_list',status=201)
+    response.request.post_data_json={'currentPage':1}
+    response.json.return_value={'errCode':0,'data':{'totalCount':50,'continueFlag':True,'list':[
+        {'objectId':'one','desc':{'description':'酒店'},'createTime':now.timestamp(),'readCount':1}]}}
+    page.goto.side_effect=lambda *args,**kwargs:handler['response'](response)
+    context.request.fetch.return_value=response  # provider repeats the same page
+    result=web.read_work_metrics.__wrapped__('company','wechat_channels',[
+        {'job_id':'a','post_id':None,'title':'酒店','description':'','created_at':now.isoformat()}])
+    assert result['status']=='unmatched' and not result['list_complete'] and not result['items']
+    assert '尚未读完整' in result['message']
+    context.request.fetch.assert_called_once()
+
+
+def test_work_without_metrics_counts_as_read_not_missing(monkeypatch):
+    from app.connectors import web_platform as web
+    context=Mock();page=Mock(url='https://channels.weixin.qq.com/platform');context.new_page.return_value=page
+    monkeypatch.setattr(web,'_ensure_open',lambda *args:None)
+    monkeypatch.setattr(web,'_get_session',lambda *args:{'page':Mock(),'context':context})
+    monkeypatch.setattr(web,'_metrics_page_status',lambda *args:{'login_required':False})
+    monkeypatch.setattr(web,'_page_text',lambda *args,**kwargs:'视频号ID')
+    handler={};page.on.side_effect=lambda event,callback:handler.update(response=callback)
+    response=Mock(url='https://channels.weixin.qq.com/micro/content/cgi-bin/mmfinderassistant-bin/post/post_list',status=201)
+    response.json.return_value={'errCode':0,'data':{'totalCount':1,'continueFlag':False,'list':[{'objectId':'known','desc':{'description':'酒店'}}]}}
+    page.goto.side_effect=lambda *args,**kwargs:handler['response'](response)
+    result=web.read_work_metrics.__wrapped__('company','wechat_channels',[{'job_id':'a','post_id':'known'}])
+    assert result['record_count']==1 and result['list_complete']
+    assert result['status']=='metrics_unavailable' and not result['items']
+    assert '已找到作品' in result['unmatched_messages']['a']

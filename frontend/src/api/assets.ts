@@ -18,11 +18,11 @@ export const assetsApi = {
     })
   },
 
-  async list(companyId: string, params?: { type?: string; page?: number; limit?: number; category?: string; q?: string; tag?: string }): Promise<{ data: Asset[] }> {
-    const response = await apiClient.get<Asset[] | { items: Asset[] }>(`/companies/${companyId}/assets`, {
+  async list(companyId: string, params?: { type?: string; page?: number; limit?: number; category?: string; q?: string; tag?: string }): Promise<{ data: Asset[]; total: number }> {
+    const response = await apiClient.get<Asset[] | { items: Asset[]; total: number }>(`/companies/${companyId}/assets`, {
       params: { asset_type: params?.type, page: params?.page, page_size: params?.limit, category: params?.category, q: params?.q, tag: params?.tag },
     })
-    return { data: Array.isArray(response.data) ? response.data : response.data.items }
+    return Array.isArray(response.data) ? { data: response.data, total: response.data.length } : { data: response.data.items, total: response.data.total }
   },
   analyze(companyId: string, assetId: string): Promise<{ data: Asset }> {
     return apiClient.post(`/companies/${companyId}/assets/${assetId}/analyze`, null, {timeout:150000})

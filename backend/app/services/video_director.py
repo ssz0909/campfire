@@ -5,10 +5,10 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
-DIRECTOR_PROMPT = '''你是酒店短视频导演和剪辑师。先选材和设计节奏，再输出结构化分镜。
+DIRECTOR_PROMPT = '''你是通用短视频导演和剪辑师，服务不同领域的企业与创作者。先选材和设计节奏，再输出结构化分镜。
 成片时长15至60秒，优先遵守 video_brief.target_duration_seconds，未指定默认30秒。
 不要按一张图片固定5秒规划。每个成片镜头1.5至3.5秒，开头镜头不超过2秒；
-用“视觉钩子→体验展开→细节证明→酒店记忆点/行动引导”的结构。镜头总时长必须等于目标时长。
+用“视觉钩子→体验展开→细节证明→主题或品牌记忆点/行动引导”的结构。镜头总时长必须等于目标时长。
 素材是候选池，不必全部使用，不限3张。只从 data_sources.selected_assets 的ID中选择。
 每张素材在整片最多使用一次，改变裁切或运镜也不能重复引用。优先覆盖目标涉及的不同场景，不用同类泳池画面填满整片。素材不足时明确说明缺口，不得循环补足时长。
 可重新排序，优先相关、清晰、适合目标画幅且场景互补的图片，在不同素材间安排不同景别与构图。
@@ -19,7 +19,7 @@ DIRECTOR_PROMPT = '''你是酒店短视频导演和剪辑师。先选材和设�
 {source_asset_id, duration_seconds, purpose, framing, camera_movement, visual_description, generation_prompt, focal_x, focal_y, opening_frame, closing_frame, transition_out, transition_duration_seconds, transition_notes}。
 framing仅wide/medium/detail；focal_x/focal_y是0到1的裁切中心，无法确定时均为0.5。
 每条generation_prompt仅描述当前一个连续镜头：主体、起止构图、唯一运镜、真实环境动态、光线和需保持的结构。
-不得复制整片脚本到每镜，不要求视频模型生成字幕、酒店文字或结尾卡片。
+不得复制整片脚本到每镜，不要求视频模型生成字幕、品牌文字或结尾卡片。
 必须逐镜设计衔接：opening_frame和closing_frame写真实的起止构图、主体位置、运镜方向和光线；相邻镜头运动方向、视觉重心尽量相接。
 transition_out仅cut（直接切镜）、match_cut（构图/动作匹配）、dissolve（短叠化）、fade（淡出接淡入）。
 transition_duration_seconds：cut/match_cut为0；dissolve/fade建议0.2至0.5秒，不得超过0.6秒。最后一镜transition_out为cut、时长0，不虚构下一场景。
@@ -121,7 +121,7 @@ def shot_generation_prompt(plan, index):
 def fallback_plan(assets, duration=30):
     """Honest local draft with varied shots, used only without an LLM plan."""
     if not assets:
-        raise ValueError('缺少已识别且可用的酒店图片，请上传素材后再制作')
+        raise ValueError('缺少已识别且可用的图片素材，请上传素材后再制作')
     minimum = max(5, 1 + math.ceil((duration - 2) / 3.5))
     if len(assets) < minimum:
         raise ValueError(f'制作{duration}秒且不重复素材至少需要{minimum}张不同图片，当前仅{len(assets)}张，请补充素材')
@@ -132,9 +132,9 @@ def fallback_plan(assets, duration=30):
         asset = assets[i]
         framing = ('wide', 'medium', 'detail')[(i + i//len(assets)) % 3]
         movement = ('固定机位，环境自然动态', '轻微侧移', '缓慢拉远')[i % 3]
-        description = asset.get('description') or asset.get('name') or '参考图中的酒店环境'
+        description = asset.get('description') or asset.get('name') or '参考图中的真实主体与场景'
         plan.append(dict(source_asset_id=str(asset['id']), duration_seconds=2 if i == 0 else round(remaining/(count-1), 3),
-            purpose='开场钩子' if i == 0 else '酒店记忆点与咨询引导' if i == count-1 else '体验与细节',
+            purpose='开场钩子' if i == 0 else '主题或品牌记忆点与咨询引导' if i == count-1 else '体验与细节',
             framing=framing, camera_movement=movement, visual_description=description,
             generation_prompt=f'单个连续镜头：{description}。{movement}，保持参考图中的空间、建筑直线和真实光线；不添加新人物或设施。'))
     plan[-1]['duration_seconds'] += duration - sum(s['duration_seconds'] for s in plan)

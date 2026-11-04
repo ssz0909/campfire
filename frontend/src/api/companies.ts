@@ -1,7 +1,27 @@
 import apiClient from './client'
 import type { Company, CompanyStore, CompanyProduct, CreateCompanyRequest } from '@/types/company'
 
+export interface VideoBrandingSettings {
+  enabled: boolean
+  text: string
+  duration_seconds: number
+  font: 'default' | 'sans' | 'serif'
+  font_size_percent: number
+  position: 'top_left' | 'top_center' | 'top_right' | 'middle_left' | 'middle_center' | 'middle_right' | 'bottom_left' | 'bottom_center' | 'bottom_right'
+  margin_x_percent: number
+  margin_y_percent: number
+}
+
 export const companiesApi = {
+  videoBrandingFonts(id: string): Promise<{data: {label: string; value: string}[]}> {
+    return apiClient.get(`/companies/${id}/video-branding/fonts`)
+  },
+  previewVideoBranding(id: string, data: VideoBrandingSettings, aspect: string): Promise<{data: {image_base64: string}}> {
+    return apiClient.post(`/companies/${id}/video-branding/preview`, data, {params: {aspect}})
+  },
+  setVideoBranding(id: string, data: VideoBrandingSettings): Promise<{data: Company}> {
+    return apiClient.put(`/companies/${id}/video-branding`, data)
+  },
   setDefaultVideoMusic(id:string,data:{music_asset_id:string|null;music_volume:number;selection_mode?:'fixed'|'random'}):Promise<{data:Company}> {
     return apiClient.put(`/companies/${id}/default-video-music`,data)
   },

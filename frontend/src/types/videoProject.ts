@@ -43,6 +43,7 @@ export interface Shot {
   transition_out?: 'cut' | 'match_cut' | 'dissolve' | 'fade'
   transition_duration_seconds?: number
   transition_notes?: string
+  subshots?: { duration_seconds: number; description: string }[]
   duration_seconds: number
   status: ShotStatus
   asset_url?: string
@@ -59,6 +60,8 @@ export interface VideoProject {
   company_id: string
   title: string
   creation_mode: CreationMode
+  generation_mode?: 'quality' | 'cost'
+  reuse_policy?: 'fresh' | 'prefer_reuse' | 'reuse_only'
   status: VideoProjectStatus
   script?: string
   aspect_ratio?: string

@@ -21,10 +21,10 @@ export const tasksApi = {
     return { data: normalize(res.data) }
   },
   async list(companyId: string, params?: { status?: string; page?: number; limit?: number; schedule_template_id?: string }) {
-    const res = await apiClient.get<{ items: OperationTask[] }>(`/companies/${companyId}/tasks`, {
+    const res = await apiClient.get<{ items: OperationTask[]; total: number }>(`/companies/${companyId}/tasks`, {
       params: { status: params?.status, page: params?.page, page_size: params?.limit, schedule_template_id: params?.schedule_template_id },
     })
-    return { data: res.data.items.map(normalize) }
+    return { data: res.data.items.map(normalize), total: res.data.total }
   },
   async get(companyId: string, taskId: string) {
     const res = await apiClient.get<OperationTask>(`/companies/${companyId}/tasks/${taskId}`)

@@ -74,6 +74,10 @@ def test_directed_generation_uses_individual_prompts_and_edit_lengths(db,monkeyp
     db.commit()
     soundtrack=Mock(side_effect=lambda db,p,content,storage:content)
     monkeypatch.setattr('app.services.video_music.apply_music',soundtrack)
+    company.business_goals={'video_branding':{'enabled':True,'text':'安吉雲中溪','duration_seconds':3}}
+    db.commit()
+    wordmark=Mock(return_value=b'branded-final')
+    monkeypatch.setattr('app.services.video_branding.add_opening_wordmark',wordmark)
     monkeypatch.setattr(settings,'STORAGE_BACKEND','local')
     monkeypatch.setattr(settings,'LOCAL_STORAGE_PATH',str(tmp_path))
     monkeypatch.setattr('app.services.video_generation.provider',lambda:Mock())
@@ -97,6 +101,10 @@ def test_directed_generation_uses_individual_prompts_and_edit_lengths(db,monkeyp
     assert '完成短淡出' in calls[0].prompt
     assert '本镜从起始即完成短淡入' in calls[1].prompt
     assert soundtrack.call_count==1
+    assert wordmark.call_count == 1
+    assert wordmark.call_args.args == (b'final','安吉雲中溪',3)
+    assert wordmark.call_args.kwargs['style'].position == 'top_center'
+    assert db.get(Asset,project.output_asset_id).asset_metadata['opening_brand']['text']=='安吉雲中溪'
     assert len(set(r.prompt for r in calls))>3
     assert all(c['framing'] for c in crops)
     assert sum(assemble.call_args.args[2])==pytest.approx(15)

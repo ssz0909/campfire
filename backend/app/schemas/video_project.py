@@ -17,6 +17,8 @@ class DefaultMusicSettings(MusicSettings):
 
 
 class VideoProjectCreate(MusicSettings):
+    generation_mode: Literal['quality', 'cost'] = 'quality'
+    reuse_policy: Literal['fresh', 'prefer_reuse', 'reuse_only'] = 'prefer_reuse'
     title: str
     script: str | None = None
     creation_mode: str
@@ -38,6 +40,8 @@ class VideoProjectCreate(MusicSettings):
 
 
 class VideoProjectUpdate(BaseModel):
+    generation_mode: Literal['quality', 'cost'] | None = None
+    reuse_policy: Literal['fresh', 'prefer_reuse', 'reuse_only'] | None = None
     music_asset_id: uuid.UUID | None = None
     music_volume: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
     title: str | None = None
@@ -66,6 +70,8 @@ class ShotRegenerateRequest(BaseModel):
 
 
 class VideoProjectResponse(BaseModel):
+    generation_mode: Literal['quality', 'cost'] = 'quality'
+    reuse_policy: Literal['fresh', 'prefer_reuse', 'reuse_only'] = 'fresh'
     music_asset_id: uuid.UUID | None = None
     music_volume: float = 0.25
     id: uuid.UUID

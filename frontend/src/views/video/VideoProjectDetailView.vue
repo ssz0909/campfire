@@ -56,6 +56,12 @@
         <div class="video-preview"><video :src="previewUrl" :poster="project.output_thumbnail_url" controls /></div>
       </AppCard>
       <AppCard v-if="project.quality_check_result?.note">{{ project.quality_check_result.note }}</AppCard>
+      <AppCard class="generation-mode-card">
+        <strong>视频生成策略：</strong>{{ project.generation_mode === 'cost' ? '成本优先' : '质量优先' }}
+        <span> · {{ {fresh:'全部重新生成',prefer_reuse:'优先复用，不足补生成',reuse_only:'仅用已有分镜，不调用视频模型'}[project.reuse_policy || 'fresh'] }}</span>
+        <span v-if="project.generation_mode === 'cost'"> · 预计 {{ Math.ceil((project.target_duration_seconds || 30) / 5) }} 次模型调用，每次生成5秒后拼接</span>
+        <span v-else> · 按结构化分镜逐镜生成</span>
+      </AppCard>
       <AppCard v-if="['draft','pending_review'].includes(project.status)">
         <h2 class="section-title">自选背景音乐</h2>
         <MusicPicker :company-id="companyId" v-model:music-asset-id="musicAssetId" v-model:music-volume="musicVolume" />
@@ -66,7 +72,10 @@
       <AppCard v-if="project.status === 'failed'">重新执行会复用已成功的镜头，重新生成失败镜头，可能产生新的模型费用。提交结果不确定时会阻止重试并提示核对中转任务。</AppCard>
       <AppCard v-if="project.shots?.some(s=>s.purpose)">
         <h2 class="section-title">分镜与节奏 · {{ project.target_duration_seconds }}秒</h2>
-        <p v-for="shot in project.shots" :key="shot.id">{{ shot.sequence_number }} · {{ shot.duration_seconds }}秒 · {{ shot.purpose }} · {{ shot.framing }} · {{ shot.camera_movement }}<br>{{ shot.visual_description }}<br><span v-if="shot.transition_out">转场：{{ shot.transition_out }} {{ shot.transition_duration_seconds || 0 }}秒 · {{ shot.transition_notes }}</span></p>
+        <div v-for="shot in project.shots" :key="shot.id">
+          <p>{{ shot.sequence_number }} · {{ shot.duration_seconds }}秒 · {{ shot.purpose }} · {{ shot.framing }} · {{ shot.camera_movement }}<br>{{ shot.visual_description }}<br><span v-if="shot.transition_out">转场：{{ shot.transition_out }} {{ shot.transition_duration_seconds || 0 }}秒 · {{ shot.transition_notes }}</span></p>
+          <p v-for="(subshot, index) in shot.subshots" :key="index">段内镜头 {{ index + 1 }} · {{ subshot.duration_seconds }}秒 · {{ subshot.description }}</p>
+        </div>
       </AppCard>
       <AppCard v-if="sourceAssets.length" class="source-assets"><h2 class="section-title">本片使用素材</h2><div v-for="asset in sourceAssets" :key="asset.id">{{ asset.name }} · {{ asset.category || '未分类' }} · {{ (asset.tags||[]).join('、') }}</div></AppCard>
       <AppCard v-if="project.publish_title" class="publish-copy">

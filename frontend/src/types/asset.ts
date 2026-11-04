@@ -21,7 +21,10 @@ export interface Asset {
   tags: string[] | null
   category?: string
   source_description?: string
-  metadata?: Record<string, any> & { vision_analysis?: { status?: string; caption?: string; visual_description?: string; error?: string; detail?: string } }
+  metadata?: Record<string, any> & {
+    vision_analysis?: { status?: string; caption?: string; visual_description?: string; error?: string; detail?: string }
+    clip_library?: { review_status?: 'pending' | 'approved'; usage_count?: number }
+  }
   width?: number
   height?: number
   resolution?: string

@@ -28,9 +28,9 @@
           @click="selectMode('reference_inspired')"
         >
           <DocumentOutline class="mode-card__icon" aria-hidden="true" />
-          <h3 class="mode-card__title">{{ t('酒店图片素材短片') }}</h3>
+          <h3 class="mode-card__title">{{ t('素材生成短片') }}</h3>
           <p class="mode-card__desc">
-            {{ t('选择多张酒店图片，按短镜头分镜制作15至60秒视频。') }}
+            {{ t('选择多张图片素材，围绕任务主题按分镜制作15至60秒视频。') }}
           </p>
         </button>
       </div>
@@ -63,7 +63,17 @@
           <n-form-item label="成片时长（15至60秒）">
             <n-select v-model:value="form.target_duration_seconds" :options="[15,20,30,45,60].map(value=>({label:value+'秒',value}))" />
           </n-form-item>
+          <n-form-item label="视频生成策略">
+            <n-select v-model:value="form.generation_mode" :options="[{label:'质量优先（现有逐镜生成）',value:'quality'},{label:'成本优先（5秒一段，段内1–2镜）',value:'cost'}]" />
+          </n-form-item>
+          <n-form-item label="分镜素材使用策略">
+            <n-select v-model:value="form.reuse_policy" :options="[{label:'优先复用已审核分镜，不足时生成',value:'prefer_reuse'},{label:'全部重新生成',value:'fresh'},{label:'仅使用已有分镜，不调用视频模型',value:'reuse_only'}]" />
+          </n-form-item>
+          <p v-if="form.generation_mode === 'cost'" class="create-hint">预计 {{ Math.ceil(form.target_duration_seconds / 5) }} 次调用，每次生成5秒，成片 {{ form.target_duration_seconds }} 秒。当前接口使用单张首帧，每段设计同一场景的1–2个景别；内部切镜由模型执行，需审核效果。至少选择 {{ Math.ceil(form.target_duration_seconds / 5) }} 张不同图片。</p>
           <template v-if="form.creation_mode === 'ai_creative'">
+            <n-form-item v-if="form.generation_mode === 'cost'" label="成本优先参考图片">
+              <n-select v-model:value="form.selected_asset_ids" :options="videoAssetOptions" multiple filterable clearable />
+            </n-form-item>
             <n-form-item :label="t('Script / Description')" path="script">
               <n-input
                 v-model:value="form.script"
@@ -99,7 +109,7 @@
             <MusicPicker :company-id="companyId" v-model:music-asset-id="form.music_asset_id" v-model:music-volume="form.music_volume" />
           </n-form-item>
         </n-form>
-        <p class="create-hint">每个成片镜头约1.5至3.5秒，开头不超过2秒。建议提供多个不同场景的清晰图片；模型片段生成后按分镜剪取，按生成镜头分别计费。每张图片只使用一次，素材不足时请补充。</p>
+        <p v-if="form.generation_mode === 'quality'" class="create-hint">每个成片镜头约1.5至3.5秒，开头不超过2秒。建议提供多个不同场景的清晰图片；模型片段生成后按分镜剪取，按生成镜头分别计费。每张图片只使用一次，素材不足时请补充。</p>
 
         <p v-if="errorMsg" class="create-error" role="alert">{{ errorMsg }}</p>
       </AppCard>
@@ -142,6 +152,8 @@ const videoAssets = ref<{ id: string; name: string; tags:string[]; category?:str
 
 const form = reactive({
   creation_mode: null as CreationMode | null,
+  generation_mode: 'quality' as 'quality' | 'cost',
+  reuse_policy: 'prefer_reuse' as 'fresh' | 'prefer_reuse' | 'reuse_only',
   title: '',
   script: '',
   reference_asset_id: null as string | null,
@@ -176,6 +188,7 @@ function selectMode(mode: CreationMode) {
 async function handleCreate() {
   errorMsg.value = ''
   if(form.selected_asset_ids.length>40){errorMsg.value='最多选择40张候选图片素材';return}
+  if(form.generation_mode === 'cost' && form.selected_asset_ids.length < Math.ceil(form.target_duration_seconds / 5)){errorMsg.value='成本优先需要至少'+Math.ceil(form.target_duration_seconds / 5)+'张不同参考图片';return}
   try {
     await formRef.value?.validate()
   } catch {
@@ -186,6 +199,8 @@ async function handleCreate() {
     const res = await videoProjectsApi.create(companyId.value, {
       title: form.title,
       creation_mode: form.creation_mode!,
+      generation_mode: form.generation_mode,
+      reuse_policy: form.reuse_policy,
       script: form.script || undefined,
       reference_asset_id: form.reference_asset_id ?? undefined,
       selected_asset_ids: form.selected_asset_ids,
@@ -238,6 +253,10 @@ async function handleCreate() {
 }
 
 .mode-card__icon {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  display: block;
   font-size: 32px;
   color: var(--color-brand-500);
 }
