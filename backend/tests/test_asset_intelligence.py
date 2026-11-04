@@ -124,15 +124,15 @@ def test_multiple_selected_images_generate_model_clips_and_bind_sources(db, monk
 
 def test_multi_image_requires_model_and_public_reference_url(db, monkeypatch):
     user = create_test_user(db); company = create_test_company(db, user)
-    images = [make_asset(db, company, user, str(i), 'guest_room', ['客房'], '客房') for i in range(2)]
+    images = [make_asset(db, company, user, str(i), 'guest_room', ['客房'], '客房') for i in range(9)]
     from app.schemas.video_project import VideoProjectCreate
     project = VideoService(db).create_project(company.id, user.id, VideoProjectCreate(
-        title='test', creation_mode='reference_inspired', selected_asset_ids=[a.id for a in images]))
+        title='test', creation_mode='reference_inspired', reuse_policy='fresh', selected_asset_ids=[a.id for a in images]))
     assert project.target_duration_seconds == 30
     monkeypatch.setattr(settings, 'PUBLIC_BASE_URL', '')
-    with pytest.raises(HTTPException, match='VIDEO_BASE_URL'):
-        VideoService(db).start_generation(company.id, project.id)
-    monkeypatch.setattr('app.services.video_generation.provider', lambda: Mock())
     with pytest.raises(HTTPException, match='PUBLIC_BASE_URL'):
+        VideoService(db).start_generation(company.id, project.id)
+    monkeypatch.setattr('app.services.video_generation.reference_url', lambda *a,**kw:'https://media.example.invalid/reference.jpg')
+    with pytest.raises(HTTPException, match='VIDEO_BASE_URL'):
         VideoService(db).start_generation(company.id, project.id)
     assert project.project_status == 'draft'

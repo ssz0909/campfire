@@ -363,6 +363,11 @@ def web_metrics(db, company_id, job_id):
                                   'auto_execute':bool(source and (source.input_params or {}).get('auto_execute') is True),
                                   **({'execution_loop':True, 'execution_root_id':job.content_snapshot['execution_root_id']} if is_loop else {})},status='pending',progress=0,execution_log=[])
                 db.add(feedback_task);db.flush()
+                if source:
+                    from copy import deepcopy
+                    from app.services.industry_templates import ensure_task_snapshot
+                    feedback_task.input_params = {**feedback_task.input_params,
+                        'industry_template_snapshot': deepcopy(ensure_task_snapshot(db, source))}
                 job.metrics = {**job.metrics, 'feedback_task_id':str(feedback_task.id)}
         if is_loop and job.metrics.get('feedback_task_id'):
             job.metrics = {**job.metrics, 'feedback_state':'review_pending', 'feedback_error':None}

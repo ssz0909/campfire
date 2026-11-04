@@ -17,6 +17,7 @@ class DefaultMusicSettings(MusicSettings):
 
 
 class VideoProjectCreate(MusicSettings):
+    industry_override: str | None = Field(default=None, max_length=64)
     generation_mode: Literal['quality', 'cost'] = 'quality'
     reuse_policy: Literal['fresh', 'prefer_reuse', 'reuse_only'] = 'prefer_reuse'
     title: str
@@ -70,6 +71,8 @@ class ShotRegenerateRequest(BaseModel):
 
 
 class VideoProjectResponse(BaseModel):
+    industry_override: str | None = None
+    industry_template_snapshot: dict | None = None
     generation_mode: Literal['quality', 'cost'] = 'quality'
     reuse_policy: Literal['fresh', 'prefer_reuse', 'reuse_only'] = 'fresh'
     music_asset_id: uuid.UUID | None = None

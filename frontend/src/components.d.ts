@@ -18,6 +18,7 @@ declare module 'vue' {
     ConfirmDialog: typeof import('./components/common/ConfirmDialog.vue')['default']
     DingdandaoLoginModal: typeof import('./components/DingdandaoLoginModal.vue')['default']
     HelloWorld: typeof import('./components/HelloWorld.vue')['default']
+    IndustryTemplatePicker: typeof import('./components/video/IndustryTemplatePicker.vue')['default']
     LanguageToggle: typeof import('./components/common/LanguageToggle.vue')['default']
     MusicPicker: typeof import('./components/video/MusicPicker.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']

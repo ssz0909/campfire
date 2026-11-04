@@ -18,6 +18,7 @@
         <n-form-item label="执行时间">
           <n-select v-model:value="timing" :options="[{label:'立即执行一次',value:'now'},{label:'每天定时执行',value:'daily'},{label:'每周指定日期执行',value:'weekly'}]" :disabled="!!route.query.parent_task_id" />
         </n-form-item>
+        <n-form-item label="行业创作模板"><IndustryTemplatePicker v-model="industryOverride" /></n-form-item>
         <n-form-item label="视频生成策略（用于本任务及后续视频制作）"><n-select v-model:value="generationMode" :options="[{label:'质量优先（现有逐镜生成）',value:'quality'},{label:'成本优先（5秒一段，段内1–2镜）',value:'cost'}]" /></n-form-item>
         <p v-if="generationMode === 'cost'" class="hint">15秒视频预计调用3次，每次生成5秒；每段用一张参考图设计同场景1–2个景别，再后期拼接。内部切镜由视频模型执行，需审核效果。</p>
         <n-form-item label="分镜素材使用策略"><n-select v-model:value="reusePolicy" :options="[{label:'优先复用已审核分镜，不足时生成',value:'prefer_reuse'},{label:'全部重新生成',value:'fresh'},{label:'仅使用已有分镜，不调用视频模型',value:'reuse_only'}]" /></n-form-item>
@@ -45,6 +46,7 @@ import { NForm, NFormItem, NSelect, NInput, NButton, NSwitch, NTimePicker } from
 import AppPageHeader from '@/components/common/AppPageHeader.vue'
 import AppCard from '@/components/common/AppCard.vue'
 import AccountPicker from '@/components/publishing/AccountPicker.vue'
+import IndustryTemplatePicker from '@/components/video/IndustryTemplatePicker.vue'
 import AppLoader from '@/components/common/AppLoader.vue'
 import { useAuthStore } from '@/stores/auth'
 import { digitalEmployeesApi } from '@/api/digitalEmployees'
@@ -59,6 +61,7 @@ const selected = computed(() => employees.value.find(e => e.id === employeeId.va
 const executionLoop = ref(route.query.execution_loop !== 'false'), accountIds = ref<string[]>(String(route.query.account_ids ?? '').split(',').filter(Boolean))
 const autoExecute = ref(route.query.auto_execute === 'true')
 const generationMode = ref<'quality' | 'cost'>('quality')
+const industryOverride = ref<string|null>(null)
 const reusePolicy = ref<'fresh' | 'prefer_reuse' | 'reuse_only'>('prefer_reuse')
 const timing = ref<'now' | 'daily' | 'weekly'>(route.query.timing === 'daily' ? 'daily' : 'now'), scheduleTime = ref('09:00')
 const weekdays = ref([0, 1, 2, 3, 4])
@@ -80,7 +83,7 @@ async function submit() {
     const res = await tasksApi.create(auth.currentCompanyId!, {
       auto_execute: autoExecute.value, digital_employee_id: selected.value.id, title: title.value.trim(),
       task_type: types[selected.value.role] ?? 'custom',
-      input_params: { goal: goal.value.trim(), execution_loop: executionLoop.value, publish_account_ids: accountIds.value, generation_mode: generationMode.value, reuse_policy: reusePolicy.value },
+      input_params: { goal: goal.value.trim(), industry_override: industryOverride.value, execution_loop: executionLoop.value, publish_account_ids: accountIds.value, generation_mode: generationMode.value, reuse_policy: reusePolicy.value },
       ...(timing.value !== 'now' ? { schedule: { frequency: timing.value, time: scheduleTime.value, timezone: 'Asia/Shanghai', weekdays: timing.value === 'weekly' ? weekdays.value : [0, 1, 2, 3, 4, 5, 6] } } : {}),
       ...(route.query.parent_task_id ? { parent_task_id: String(route.query.parent_task_id) } : {}),
     })

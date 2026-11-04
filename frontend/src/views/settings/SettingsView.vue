@@ -22,6 +22,8 @@
                 clearable
               />
             </n-form-item>
+            <p v-if="industryError" role="alert">{{ industryError }}</p>
+            <p class="industry-note">新任务默认使用所选行业的已发布模板；清空行业使用通用模板。已有任务与定时计划不受修改影响。</p>
             <n-form-item :label="t('Website')" path="website">
               <n-input v-model:value="companyForm.website" placeholder="https://..." />
             </n-form-item>
@@ -202,6 +204,7 @@ import { useAuthStore } from '@/stores/auth'
 import { companiesApi, type VideoBrandingSettings } from '@/api/companies'
 import type { CompanyProduct } from '@/types/company'
 import MusicPicker from '@/components/video/MusicPicker.vue'
+import {useIndustryCatalog} from '@/composables/useIndustryCatalog'
 
 const companyStore = useCompanyStore()
 const auth = useAuthStore()
@@ -310,14 +313,7 @@ const brand = reactive({
   keywords: '',
 })
 
-const industryOptions = computed(() => [
-  { label: t('E-commerce'), value: 'ecommerce' },
-  { label: t('Retail'), value: 'retail' },
-  { label: t('Technology'), value: 'technology' },
-  { label: t('Healthcare'), value: 'healthcare' },
-  { label: t('Finance'), value: 'finance' },
-  { label: t('Other'), value: 'other' },
-])
+const {industryOptions, industryError} = useIndustryCatalog()
 
 const voiceOptions = computed(() => [
   { label: t('Professional'), value: 'professional' },
@@ -342,6 +338,7 @@ onMounted(async () => {
   if (companyStore.currentCompany) {
     companyForm.name = companyStore.currentCompany.name
     companyForm.industry = companyStore.currentCompany.industry ?? null
+    if (['hotel','tourism','酒店','酒店与民宿','景区','酒旅'].includes(companyForm.industry || '')) companyForm.industry = 'travel'
     companyForm.website = companyStore.currentCompany.website ?? ''
     companyForm.description = companyStore.currentCompany.description ?? ''
     const goals=companyStore.currentCompany.business_goals??{};
@@ -393,10 +390,11 @@ async function saveCompany() {
   try {
     await companyStore.updateCompany({
       name: companyForm.name,
-      industry: companyForm.industry ?? undefined,
+      industry: companyForm.industry,
       website: companyForm.website || undefined,
       description: companyForm.description || undefined,
     })
+    await auth.fetchCompanies()
     companySaveMsg.value = t('Company info saved.')
   } catch {
     companySaveError.value = true

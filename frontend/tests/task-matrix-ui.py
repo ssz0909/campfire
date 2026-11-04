@@ -39,6 +39,9 @@ async def check(browser, base, width):
             result = {"id": "user", "email": "test@example.invalid", "is_active": True}
         elif path == "/companies":
             result = [{"id": "company", "name": "测试酒店"}]
+        elif path == "/industries":
+            result = [{"code":"generic","name":"通用","version":1,"description":""},
+                      {"code":"travel","name":"酒旅","version":1,"description":"住宿与景区"}]
         elif path.endswith("/employees"):
             result = [{"id": "employee", "name": "视频制作员", "role_title": "video_producer",
                        "role": "video_producer", "is_active": True, "description": "视频制作"}]

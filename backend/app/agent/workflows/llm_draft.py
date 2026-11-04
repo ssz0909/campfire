@@ -100,6 +100,10 @@ def enrich(result, task, runtime, forbidden_words):
         '执行闭环中的岗位必须交付可供下一阶段使用的内容，不要添加“不再派生任务”等停止流程的要求。'
         '不得创建循环任务。遵循资料中岗位执行约束及品牌禁用词。'
     )
+    from app.services.industry_templates import render_guidance
+    snapshot = result.get('industry_template_snapshot') or (task.input_params or {}).get('industry_template_snapshot')
+    if snapshot:
+        system += render_guidance(snapshot)
     if result['role'] == 'video_producer':
         system += COST_DIRECTOR_PROMPT if generation_mode == 'cost' else DIRECTOR_PROMPT
         if (task.input_params or {}).get('reuse_policy', 'fresh') != 'fresh':

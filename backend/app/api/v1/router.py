@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.v1 import (
+    industry_templates,
     admin,
     auth,
     callbacks,
@@ -19,6 +20,7 @@ from app.api.v1 import (
 )
 
 router = APIRouter()
+router.include_router(industry_templates.router, tags=['industry-templates'])
 
 router.include_router(admin.router, prefix="/admin", tags=["admin"])
 router.include_router(auth.router, prefix="/auth", tags=["auth"])

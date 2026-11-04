@@ -25,6 +25,8 @@ class VideoService:
         data: VideoProjectCreate,
     ) -> VideoProject:
         values=data.model_dump()
+        from app.services.industry_templates import resolve_snapshot
+        values['industry_template_snapshot'] = resolve_snapshot(self.db, company_id, values.get('industry_override'))
         if 'music_asset_id' not in data.model_fields_set:
             from app.services.video_music import resolve_music_settings
             values.update(resolve_music_settings(self.db,company_id))
@@ -153,6 +155,8 @@ class VideoService:
                 if str(project.id) in _active:
                     raise HTTPException(409, '上次执行尚在结束，请稍后重新执行')
         from app.services.video_generation import provider, enqueue
+        from app.services.industry_templates import project_snapshot
+        project_snapshot(self.db, project)
         if project.task_id:
             from app.models.task import OperationTask
             from app.services.execution_loop import enabled, assert_active
@@ -189,7 +193,8 @@ class VideoService:
                 try: project.storyboard=cost_plan(descriptors,project.target_duration_seconds)
                 except ValueError as exc: raise HTTPException(422,str(exc)) from exc
             else:
-                project.storyboard=fallback_plan(descriptors,project.target_duration_seconds)
+                try: project.storyboard=fallback_plan(descriptors,project.target_duration_seconds)
+                except ValueError as exc: raise HTTPException(422,str(exc)) from exc
         if project.generation_mode == 'cost':
             from app.services.video_cost_plan import validate_cost_plan
             try:

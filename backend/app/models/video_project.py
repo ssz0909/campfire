@@ -27,6 +27,8 @@ class VideoProject(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
     creation_mode: Mapped[str] = mapped_column(String(50), nullable=False)
     generation_mode: Mapped[str] = mapped_column(String(20), default='quality', server_default='quality', nullable=False)
     reuse_policy: Mapped[str] = mapped_column(String(20), default='fresh', server_default='fresh', nullable=False)
+    industry_override: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    industry_template_snapshot: Mapped[dict | None] = mapped_column(nullable=True)
     marketing_goal: Mapped[str | None] = mapped_column(Text, nullable=True)
     target_audience: Mapped[str | None] = mapped_column(Text, nullable=True)
     product_name: Mapped[str | None] = mapped_column(String(255), nullable=True)

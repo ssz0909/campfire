@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from app.config import settings
 from app.models.base import Base  # noqa: F401
+from app.models.industry_template import IndustryTemplate, IndustryTemplateVersion  # noqa: F401
 
 # Import all models so autogenerate can detect them
 from app.models.user import User  # noqa: F401

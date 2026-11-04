@@ -56,6 +56,7 @@
         <div class="video-preview"><video :src="previewUrl" :poster="project.output_thumbnail_url" controls /></div>
       </AppCard>
       <AppCard v-if="project.quality_check_result?.note">{{ project.quality_check_result.note }}</AppCard>
+      <AppCard v-if="project.industry_template_snapshot">行业模板：{{ project.industry_template_snapshot.name }} · v{{ project.industry_template_snapshot.version }}。已固定本次配置，重新执行沿用此版本。</AppCard>
       <AppCard class="generation-mode-card">
         <strong>视频生成策略：</strong>{{ project.generation_mode === 'cost' ? '成本优先' : '质量优先' }}
         <span> · {{ {fresh:'全部重新生成',prefer_reuse:'优先复用，不足补生成',reuse_only:'仅用已有分镜，不调用视频模型'}[project.reuse_policy || 'fresh'] }}</span>

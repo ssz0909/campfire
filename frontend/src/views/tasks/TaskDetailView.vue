@@ -19,6 +19,7 @@
         <p>{{ task.output?.employee_name ?? '数字员工' }} · {{ taskLabels[task.status] }} <span v-if="!schedule">· {{ task.progress }}%</span></p>
         <p class="hint">审批策略：{{ task.input_params?.auto_execute === true ? '全流程自动执行（含视频生成与发布）' : '人工审批' }}</p>
         <p class="hint">目标：{{ task.input_params?.goal ?? task.title }}</p>
+        <p v-if="task.input_params?.industry_template_snapshot" class="hint">行业模板：{{ task.input_params.industry_template_snapshot.name }} · v{{ task.input_params.industry_template_snapshot.version }}；后续派发、重试及定时轮次沿用此快照。</p>
         <p v-if="execution?.publish_accounts?.length" class="hint">发布账号：{{ execution.publish_accounts.map(row => row.label).join('、') }}</p>
         <p v-if="task.output?.mode_label" class="hint">{{ task.output.mode_label }} · {{ task.output.notice }}</p>
         <p v-if="task.error_message" class="error">{{ task.error_message }}</p>

@@ -5,6 +5,8 @@ from app.agent.workflows.operations import ROLE_TYPES
 from app.agent.workflows.llm_draft import TRANSITIONS
 
 def create_handoffs(db, parent):
+    from app.services.industry_templates import ensure_task_snapshot
+    ensure_task_snapshot(db, parent)
     from app.services.execution_loop import enabled, assert_active, child_params, actions_for
     if enabled(parent):
         assert_active(db, parent)
@@ -58,7 +60,8 @@ def create_video_handoff(db, task):
             by_id={a.id:a for a in available}
             selected=[by_id[asset_id] for asset_id in selected_ids]
         else:
-            selected=select_assets_for_video(db,task.company_id,goal)
+            from app.services.industry_templates import ensure_task_snapshot
+            selected=select_assets_for_video(db,task.company_id,goal,template=ensure_task_snapshot(db, task))
         from app.services.video_director import validate_plan, fallback_plan, target_duration
         duration = target_duration((task.output or {}).get('video_brief') or task.input_params, goal)
         generation_mode = (task.input_params or {}).get('generation_mode', 'quality')
@@ -85,6 +88,10 @@ def create_video_handoff(db, task):
             target_duration_seconds=duration, storyboard=plan, project_status='draft',**music)
         project.generation_mode = generation_mode
         project.reuse_policy = (task.input_params or {}).get('reuse_policy', 'fresh')
+        from copy import deepcopy
+        from app.services.industry_templates import ensure_task_snapshot
+        project.industry_override = (task.input_params or {}).get('industry_override')
+        project.industry_template_snapshot = deepcopy(ensure_task_snapshot(db, task))
         from app.models.company import Company
         company = db.query(Company).filter_by(id=task.company_id).first()
         project.product_name = company.name if company else None

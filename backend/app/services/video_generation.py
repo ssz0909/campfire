@@ -99,20 +99,23 @@ def _compose_selected_images(db, project, selected_ids):
         asset = by_id[asset_id]
         analysis = (asset.asset_metadata or {}).get('vision_analysis') or {}
         description = analysis.get('visual_description') or asset.source_description or asset.name
+        from app.services.industry_templates import project_snapshot, visual_guidance
+        industry_snapshot = project_snapshot(db, project)
+        industry_guidance = visual_guidance(industry_snapshot)
         clip_duration = shot['duration_seconds']
         if cost:
             from app.services.video_cost_plan import cost_prompt
-            prompt = cost_prompt(shot['subshots'], clip_duration) + f'\n当前参考图可见事实：{description}。'
+            prompt = cost_prompt(shot['subshots'], clip_duration) + f'\n当前参考图可见事实：{description}。{industry_guidance}'
         elif planned:
             from app.services.video_director import shot_generation_prompt
             prompt = (f"{shot_generation_prompt(plan, number-1)}\n当前镜头可见事实：{description}。"
                       f"景别：{shot['framing']}；运镜：{shot['camera_movement']}。"
                       '只生成当前参考场景的动态镜头，可执行脚本指定的淡入淡出与衔接动作，不凭空切换到其他场景；不生成字幕、标志或文字，不添加参考图外的人物与设施；'
-                      '保持建筑直线与主体结构，避免闪烁、扭曲。动作从片段起始即自然展开。')
+                      '保持主体直线与结构，避免闪烁、扭曲。动作从片段起始即自然展开。' + industry_guidance)
         else:
             prompt = (f'{project.script or project.marketing_goal or project.title}\n'
                       f'现在只生成第{number}个动态镜头：{description}。保持参考图中的真实主体与场景，'
-                      f'统一{project.aspect_ratio}构图。自然缓慢推进或横移，不得生成照片轮播或虚构设施。')
+                      f'统一{project.aspect_ratio}构图。自然缓慢推进或横移，不得生成照片轮播或虚构设施。{industry_guidance}')
         if shot.get('reused_asset_id'):
             clip, reused_asset = read_reused_clip(db, project, shot, storage)
             record_use(db, project, reused_asset)
@@ -321,6 +324,8 @@ def run(project_id):
             project.target_audience,project.key_selling_points,project.cta_text,project.script] if v)
         if visual_notes:
             prompt += '\n参考素材画面要点：\n' + '\n'.join(visual_notes)
+        from app.services.industry_templates import project_snapshot, visual_guidance
+        prompt += visual_guidance(project_snapshot(db, project))
         prompt += (f'\n必须生成真正连续运动的视频，不得做图片轮播、幻灯片或静态画面拼接。'
                    f'画面比例严格为 {project.aspect_ratio}，所有主体保持完整，禁止横竖屏混排、拉伸和黑边。'
                    '如提供首帧参考图，保持其真实主体与场景，添加自然镜头运动及可见主体的合理动态，不虚构素材之外的人物或设施；未提供参考图时按用户脚本和主题生成。')

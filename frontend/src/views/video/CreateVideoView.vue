@@ -63,6 +63,7 @@
           <n-form-item label="成片时长（15至60秒）">
             <n-select v-model:value="form.target_duration_seconds" :options="[15,20,30,45,60].map(value=>({label:value+'秒',value}))" />
           </n-form-item>
+          <n-form-item label="行业创作模板"><IndustryTemplatePicker v-model="industryOverride" /></n-form-item>
           <n-form-item label="视频生成策略">
             <n-select v-model:value="form.generation_mode" :options="[{label:'质量优先（现有逐镜生成）',value:'quality'},{label:'成本优先（5秒一段，段内1–2镜）',value:'cost'}]" />
           </n-form-item>
@@ -138,6 +139,7 @@ import { videoProjectsApi } from '@/api/videoProjects'
 import { assetsApi } from '@/api/assets'
 import type { CreationMode } from '@/types/videoProject'
 import MusicPicker from '@/components/video/MusicPicker.vue'
+import IndustryTemplatePicker from '@/components/video/IndustryTemplatePicker.vue'
 
 const router = useRouter()
 const { t } = useI18n()
@@ -145,6 +147,7 @@ const authStore = useAuthStore()
 const companyId = computed(() => authStore.currentCompanyId!)
 
 const step = ref(1)
+const industryOverride = ref<string|null>(null)
 const creating = ref(false)
 const errorMsg = ref('')
 const formRef = ref<FormInst | null>(null)
@@ -198,6 +201,7 @@ async function handleCreate() {
   try {
     const res = await videoProjectsApi.create(companyId.value, {
       title: form.title,
+      industry_override: industryOverride.value,
       creation_mode: form.creation_mode!,
       generation_mode: form.generation_mode,
       reuse_policy: form.reuse_policy,

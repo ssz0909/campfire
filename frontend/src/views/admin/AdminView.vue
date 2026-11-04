@@ -130,6 +130,7 @@
           />
         </section>
         <ModelSettings v-if="activeTab === 'models'" />
+        <IndustryTemplates v-if="activeTab === 'industries'" />
       </main>
     </div>
 
@@ -186,6 +187,7 @@ import {
   AddOutline, SearchOutline,
 } from '@vicons/ionicons5'
 import ModelSettings from './ModelSettings.vue'
+import IndustryTemplates from './IndustryTemplates.vue'
 import AppBadge from '@/components/common/AppBadge.vue'
 import { useAuthStore } from '@/stores/auth'
 import apiClient from '@/api/client'
@@ -232,9 +234,10 @@ interface AdminCompany {
 const router = useRouter()
 const authStore = useAuthStore()
 
-const activeTab = ref<'overview' | 'users' | 'companies' | 'models'>('overview')
+const activeTab = ref<'overview' | 'users' | 'companies' | 'models' | 'industries'>('overview')
 const tabs = [
   { key: 'models' as const, label: '大模型配置', icon: BarChartOutline },
+  { key: 'industries' as const, label: '行业模板', icon: BusinessOutline },
   { key: 'overview' as const, label: '概览', icon: BarChartOutline },
   { key: 'users' as const, label: '用户', icon: PeopleOutline },
   { key: 'companies' as const, label: '企业', icon: BusinessOutline },

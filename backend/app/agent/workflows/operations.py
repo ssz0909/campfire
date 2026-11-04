@@ -23,6 +23,8 @@ class OperationsWorkflow:
         from app.connectors.hotel.service import HotelConnectorService
         company_id = tenant_context.require_company()
         company = db.query(Company).filter(Company.id == company_id).one()
+        from app.services.industry_templates import ensure_task_snapshot, render_guidance
+        template = ensure_task_snapshot(db, task)
         employee = None
         if task.digital_employee_id:
             employee = db.query(DigitalEmployee).filter(
@@ -45,8 +47,11 @@ class OperationsWorkflow:
         start, end = left.isoformat(), right.isoformat()
         hotel = HotelConnectorService(company_id, db)
         config = hotel.get_config()
+        order_analysis_required = config is not None or any(word in ' '.join([
+            str(goal), task.title, str((task.input_params or {}).get('execution_goal', ''))])
+            for word in ('酒店订单', '酒店经营', '住宿经营', '入住率', '间夜'))
         coverage = None
-        if role == 'data_analyst' and not (task.input_params or {}).get('feedback_publish_job_id'):
+        if role == 'data_analyst' and order_analysis_required and not (task.input_params or {}).get('feedback_publish_job_id'):
             coverage = ensure_analysis_orders(hotel, task, tenant_context, runtime, left, right)
         metrics = hotel.metrics(start, end) if config else None
         assets = db.query(Asset).filter(
@@ -59,13 +64,15 @@ class OperationsWorkflow:
         published = db.query(PublishJob).filter(PublishJob.company_id == company_id, PublishJob.status == "published").all()
         pending = db.query(Approval).filter(Approval.company_id == company_id,
                                            Approval.status == "pending").count()
-        runtime._append_log(task, "info", f"已读取企业档案、{start} 至 {end} 酒店指标、可用素材与任务审批汇总")
+        runtime._append_log(task, "info", f"已读取企业档案、{start} 至 {end} 可用经营指标、素材与任务审批汇总")
         task.progress = 60
         sources = {
             "company": {"name": company.name, "industry": company.industry,
+                        "description": company.description, "brand_voice": company.brand_voice,
                         "target_audience": company.target_audience,
                         "brand_positioning": company.brand_positioning},
             "hotel": {"period": [start, end], "status": "available" if metrics and metrics["total_orders"] else "no_data",
+                      'order_analysis_required': order_analysis_required,
                       "last_sync_at": config.last_sync_at.isoformat() if config and config.last_sync_at else None,
                       "metrics": metrics, 'sync_coverage': coverage},
             "assets": [{"id": str(a.id), "name": a.name, "type": a.asset_type,
@@ -79,7 +86,7 @@ class OperationsWorkflow:
         selected_assets=[]
         if role=='video_producer':
             from app.services.asset_selection import select_assets_for_video
-            selected_assets=select_assets_for_video(db,company_id,goal)
+            selected_assets=select_assets_for_video(db,company_id,goal,template=template)
             from app.services.video_director import target_duration
             video_duration=target_duration(task.input_params, (task.input_params or {}).get('execution_goal') or goal)
             sources['selected_assets']=[{'id':str(a.id),'name':a.name,'category':a.category,'tags':a.tags or [],
@@ -107,7 +114,7 @@ class OperationsWorkflow:
             gaps.append('所需订单时间范围尚未完整覆盖，以下结果仅为已同步样本，不能代表完整区间')
         if not published:
             gaps.append("尚无已发布内容的回流数据，无法计算抖音或视频号曝光、互动和转化趋势。")
-        if not metrics or not metrics["total_orders"]:
+        if order_analysis_required and (not metrics or not metrics["total_orders"]):
             gaps.append(f"{start} 至 {end} 无已同步酒店订单，无法判断经营表现；请先连接并同步订单。")
         if not company.target_audience:
             gaps.append("企业目标客群未填写，内容中的客群定位需要人工补充。")
@@ -123,10 +130,12 @@ class OperationsWorkflow:
                 metric_lines.append(f"订单/住宿金额：{metrics.get('order_amount')}；Web 数据不能视为财务实收收入。")
             metric_lines.append(metrics.get("occupancy_note") or "入住率需结合完整营业日数据复核。")
         else:
-            metric_lines.append("酒店经营数据不足，当前不输出营收、入住率或增长结论。")
+            metric_lines.append("酒店经营数据不足，当前不输出营收、入住率或增长结论。" if order_analysis_required else
+                                "未接入可用经营数据，不能输出营收或增长结论；可依据已知企业资料、素材与实际平台数据制定内容方案。")
         audience = company.target_audience or "待确认目标客群"
         positioning = company.brand_positioning or "待补充品牌卖点"
-        sections = [{"title": "任务目标", "content": str(goal)}]
+        sections = [{"title": "任务目标", "content": str(goal)},
+                    {"title": "行业创作配置", "content": f"{template['name']} · v{template['version']}（{template['resolved_from']}）\n" + render_guidance(template)}]
         if task.parent_task_id:
             parent = db.query(OperationTask).filter(OperationTask.id == task.parent_task_id,
                 OperationTask.company_id == company_id, OperationTask.status == "completed").first()
@@ -139,7 +148,7 @@ class OperationsWorkflow:
         if role == "content_planner":
             sections += [
                 {"title": "营销主题与客群", "content": f"主题：{goal}\n面向：{audience}\n品牌定位：{positioning}\n渠道建议：企业现有内容渠道，先小范围测试。"},
-                {"title": "发布文案草稿", "content": f"标题：在{company.name}，安排一次属于自己的放松时光\n正文：围绕“{goal}”，分享一次真实体验。你最关心住宿环境、出行便利还是服务细节？欢迎留言告诉我们。\n配图：优先选用已授权的真实环境图；房型、价格和权益需发布前核实。"},
+                {"title": "发布文案草稿", "content": f"标题：发现{company.name}的真实亮点\n正文：围绕“{goal}”展示素材证实的内容。欢迎关注，留言或私信咨询。\n配图：优先选用已授权且主题相关的真实素材；价格和权益需核实。"},
                 {"title": "三日内容计划", "content": "第1日：环境与场景介绍，记录浏览量。\n第2日：解答一个客群常见问题，记录互动量。\n第3日：展示一条真实服务流程，记录咨询量。\n发布后手动回填各渠道数据，再由数据分析员复盘。"},
             ]
             next_actions = [{"role": "video_producer", "title": "制作营销视频脚本", "goal": f"根据以下已审阅文案及原任务时长要求制作节奏鲜明的结构化分镜脚本：{goal}"}]
@@ -171,7 +180,7 @@ class OperationsWorkflow:
             sections += [{"title": "经营概览", "content": "\n".join(metric_lines)},
                          {"title": "运营行动建议", "content": f"围绕“{goal}”执行：\n1. 核对企业定位与客群资料，补齐数据缺口。\n2. 内容策划员输出一份面向{audience}的内容计划。\n3. 视频制作员将审核后的主题转成脚本与分镜。\n4. 数据分析员在数据补齐后复盘订单与内容表现。\n5. 运营助理汇总任务与待审批事项。"}]
             next_actions = [{"role": "content_planner", "title": "制定内容计划", "goal": f"围绕运营目标制定三日内容计划：{goal}"},
-                            {"role": "data_analyst", "title": "分析酒店经营数据", "goal": f"分析 {start} 至 {end} 的订单并说明数据边界：{goal}"}]
+                            {"role": "data_analyst", "title": "分析经营与内容数据", "goal": f"分析 {start} 至 {end} 的可用数据并说明数据边界：{goal}"}]
         if employee:
             sections.append({"title": "岗位执行约束", "content": "\n".join(filter(None, [employee.work_goals, employee.system_instructions] + [str(r) for r in (employee.business_rules or [])]))})
         sections.append({"title": "数据缺口与后续补充", "content": "\n".join(gaps) or "请复核同步时间与素材授权后使用结果。"})
@@ -192,7 +201,7 @@ class OperationsWorkflow:
                 report = report.replace(str(word), "[禁用词已隐藏]")
                 for section in sections:
                     section["content"] = section["content"].replace(str(word), "[禁用词已隐藏]")
-        task.tools_used = ["company_profile", "hotel_metrics", "asset_catalog", "task_summary"]
+        task.tools_used = ["company_profile", "asset_catalog", "task_summary"] + (["hotel_metrics"] if config else [])
         if coverage and coverage['sync_job_ids']:
             task.tools_used.append('hotel_order_sync')
         task.models_used = []
@@ -203,6 +212,7 @@ class OperationsWorkflow:
         return {"title": task.title, "mode": "local_rules", "mode_label": "本地规则草稿（未调用大模型）",
                 **({'video_storyboard':local_storyboard,'video_brief': {'target_duration_seconds':video_duration,'aspect_ratio':'9:16','generation_mode':(task.input_params or {}).get('generation_mode','quality'),'reuse_policy':(task.input_params or {}).get('reuse_policy','fresh')}, 'selected_asset_ids':[str(a.id) for a in selected_assets]} if role=='video_producer' else {}),
                 "employee_name": employee.name if employee else "运营工作流", "role": role,
+                'industry_template_snapshot': template,
                 "sections": sections, "report_markdown": report, "data_sources": sources,
                 "data_gaps": gaps, "next_actions": next_actions,
                 "delivery": "video_script" if role == "video_producer" else "report",

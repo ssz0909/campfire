@@ -41,7 +41,7 @@ export const companiesApi = {
   },
 
   update(id: string, data: Partial<CreateCompanyRequest>): Promise<{ data: Company }> {
-    return apiClient.patch(`/companies/${id}`, data)
+    return apiClient.put(`/companies/${id}`, data)
   },
 
   delete(id: string): Promise<void> {

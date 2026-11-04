@@ -47,6 +47,14 @@ class TaskService:
         if (data.input_params or {}).get('generation_mode', 'quality') not in ('quality', 'cost'):
             raise HTTPException(422, '视频生成策略仅支持质量优先或成本优先')
         params = configure(data.input_params, (data.input_params or {}).get('goal') or data.title)
+        from copy import deepcopy
+        from app.services.industry_templates import resolve_snapshot, ensure_task_snapshot
+        # Snapshots are server-owned; never accept client-supplied prompt snapshots.
+        params.pop('industry_template_snapshot', None)
+        if data.parent_task_id and params.get('industry_override') is None:
+            params['industry_template_snapshot'] = deepcopy(ensure_task_snapshot(self.db, parent))
+        else:
+            params['industry_template_snapshot'] = resolve_snapshot(self.db, company_id, params.get('industry_override'))
         params['auto_execute'] = data.auto_execute
         if data.auto_execute:
             from app.services.auto_execution import require_authority

@@ -16,11 +16,12 @@ CATEGORY_TERMS={
 }
 
 
-def select_assets_for_video(db,company_id,goal,limit=40):
+def select_assets_for_video(db,company_id,goal,limit=40,template=None):
     assets=db.query(Asset).filter(Asset.company_id==company_id,Asset.asset_type=='image',
         Asset.is_deleted==False,Asset.is_available==True,Asset.processing_status=='ready').all()
     if not assets:return []
     topic=(goal or '').casefold()
+    hints = ((template or {}).get('content') or {}).get('selection_keywords', [])
     scored=[]
     for asset in assets:
         analysis=(asset.asset_metadata or {}).get('vision_analysis') or {}
@@ -28,19 +29,23 @@ def select_assets_for_video(db,company_id,goal,limit=40):
         score=sum(1 for value in (asset.tags or []) if value and str(value).casefold() in topic)
         score+=sum(2 for term in CATEGORY_TERMS.get(asset.category,()) if term in topic)
         score+=sum(1 for value in [analysis.get('caption',''),asset.source_description or ''] if value and value.casefold() in topic)
+        facts = ' '.join([asset.name or '', asset.source_description or '', analysis.get('visual_description', ''),
+                          ' '.join(asset.tags or []), ' '.join(CATEGORY_TERMS.get(asset.category, ())) ]).casefold()
+        # Industry is a tie-breaker only; the user's subject always ranks first.
+        industry_score = min(0.5, sum(0.1 for word in hints if word.casefold() in facts))
         # Avoid tiny images and reward portrait-ready sources. Keep unmeasured
         # assets usable but rank measured, adequate images ahead of them.
         width,height=asset.width or 0,asset.height or 0
         if width and height and min(width,height)<320:continue
         quality=(2 if min(width,height)>=720 else 0)+(1 if height>width else 0)
-        scored.append((score,quality,asset.created_at,asset))
+        scored.append((score,quality,asset.created_at,asset,industry_score))
     scored.sort(key=lambda x:(x[0],x[1],x[2]),reverse=True)
     if scored and scored[0][0]>0:scored=[item for item in scored if item[0]>0]
     # Select complementary scenes before adding repeated categories. An
     # oversized pool is safe for the director to reduce, unlike a fixed 3 images.
     chosen=[];seen={}
     while scored and len(chosen)<limit:
-        best=max(range(len(scored)),key=lambda i:(scored[i][0]-2*seen.get(scored[i][3].category,0),scored[i][1],scored[i][2]))
-        _,_,_,asset=scored.pop(best)
+        best=max(range(len(scored)),key=lambda i:(scored[i][0]-2*seen.get(scored[i][3].category,0),scored[i][4],scored[i][1],scored[i][2]))
+        _,_,_,asset,_=scored.pop(best)
         chosen.append(asset);seen[asset.category]=seen.get(asset.category,0)+1
     return chosen

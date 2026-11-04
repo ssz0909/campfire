@@ -1,4 +1,5 @@
 from app.models.base import Base, TimestampMixin, SoftDeleteMixin, UUIDMixin
+from app.models.industry_template import IndustryTemplate, IndustryTemplateVersion
 from app.models.user import User
 from app.models.company import Company, Store, CompanyProduct
 from app.models.member import CompanyMembership

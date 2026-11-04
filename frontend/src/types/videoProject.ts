@@ -54,6 +54,8 @@ export interface Shot {
 }
 
 export interface VideoProject {
+  industry_override?: string | null
+  industry_template_snapshot?: import('@/api/industryTemplates').TemplateSnapshot | null
   music_asset_id?: string|null
   music_volume?: number
   id: string

@@ -33,6 +33,7 @@
               :options="industryOptions"
               clearable
             />
+            <p v-if="industryError" class="industry-note" role="alert">{{ industryError }}</p>
           </n-form-item>
 
           <n-form-item :label="t('Website')" path="website">
@@ -69,12 +70,13 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
 const { t } = useI18n()
-import { ref, reactive, computed } from 'vue'
+import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { NForm, NFormItem, NInput, NButton, NSelect, type FormInst, type FormRules } from 'naive-ui'
 import { useAuthStore } from '@/stores/auth'
 import { companiesApi } from '@/api/companies'
 import LanguageToggle from '@/components/common/LanguageToggle.vue'
+import {useIndustryCatalog} from '@/composables/useIndustryCatalog'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -97,17 +99,7 @@ const rules: FormRules = {
   ],
 }
 
-const industryOptions = computed(() => [
-  { label: t('E-commerce'), value: 'ecommerce' },
-  { label: t('Retail'), value: 'retail' },
-  { label: t('Technology'), value: 'technology' },
-  { label: t('Healthcare'), value: 'healthcare' },
-  { label: t('Finance'), value: 'finance' },
-  { label: t('Education'), value: 'education' },
-  { label: t('Media & Entertainment'), value: 'media' },
-  { label: t('Real Estate'), value: 'real_estate' },
-  { label: t('Other'), value: 'other' },
-])
+const {industryOptions, industryError} = useIndustryCatalog()
 
 async function handleSubmit() {
   errorMsg.value = ''
@@ -201,4 +193,5 @@ async function handleSubmit() {
   border-radius: var(--radius-md);
   text-align: center;
 }
+.industry-note {font-size:12px;color:var(--text-secondary);margin-top:8px;line-height:1.6}
 </style>

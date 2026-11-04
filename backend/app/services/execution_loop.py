@@ -12,7 +12,7 @@ from app.models.approval import Approval
 PLATFORMS = {'douyin', 'wechat_channels'}
 NEXT = {'operations_manager': 'data_analyst', 'data_analyst': 'content_planner',
         'content_planner': 'video_producer'}
-TITLES = {'data_analyst': '补齐订单并分析经营，提出改进计划',
+TITLES = {'data_analyst': '核对可用数据并分析经营，提出改进计划',
           'content_planner': '根据经营分析制定可执行视频内容方案',
           'video_producer': '根据已审批内容方案制作视频脚本'}
 
@@ -56,7 +56,8 @@ def actions_for(task, result):
         return result
     coverage = (result.get('data_sources', {}).get('hotel') or {}).get('sync_coverage')
     role = result.get('role')
-    blocked = role == 'data_analyst' and (not coverage or not coverage.get('complete'))
+    requires_orders = (result.get('data_sources', {}).get('hotel') or {}).get('order_analysis_required', True)
+    blocked = role == 'data_analyst' and requires_orders and (not coverage or not coverage.get('complete'))
     next_role = NEXT.get(role)
     goal = (task.input_params or {}).get('execution_goal') or (task.input_params or {}).get('goal') or task.title
     actions = [] if blocked or not next_role else [{
@@ -74,6 +75,10 @@ def child_params(parent):
     automation = {'auto_execute': params.get('auto_execute') is True,
                   'generation_mode': params.get('generation_mode', 'quality'),
                   'reuse_policy': params.get('reuse_policy', 'fresh')}
+    from copy import deepcopy
+    for key in ('industry_override', 'industry_template_snapshot'):
+        if key in params:
+            automation[key] = deepcopy(params[key])
     if not enabled(parent):
         return automation
     return {**automation, 'execution_loop': True, 'execution_root_id': params.get('execution_root_id', str(parent.id)),
@@ -193,6 +198,8 @@ def continue_loop(db, root, platforms, account_ids=None):
         raise HTTPException(400, '请在总任务上启动或继续闭环')
     if root.status != 'completed':
         raise HTTPException(409, '先审批总任务报告，再继续执行闭环')
+    from app.services.industry_templates import ensure_task_snapshot
+    ensure_task_snapshot(db, root)
     from app.services.publishing_service import resolve_publish_accounts
     values = {**(root.input_params or {}), 'execution_loop':True, 'publish_platforms':platforms}
     if account_ids is not None: values['publish_account_ids'] = account_ids

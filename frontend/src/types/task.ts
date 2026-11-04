@@ -42,7 +42,7 @@ export interface OperationTask {
   task_type: TaskType
   status: TaskStatus
   progress: number
-  input_params: Record<string, unknown>
+  input_params: Record<string, unknown> & {industry_template_snapshot?: import('@/api/industryTemplates').TemplateSnapshot}
   output?: TaskOutput
   error_message?: string
   cost_usd?: number

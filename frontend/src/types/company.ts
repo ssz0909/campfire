@@ -3,7 +3,7 @@ export interface Company {
   name: string
   slug: string
   logo_url?: string
-  industry?: string
+  industry?: string | null
   business_goals?: Record<string, unknown>
   description?: string
   website?: string
@@ -37,7 +37,7 @@ export interface CompanyProduct {
 
 export interface CreateCompanyRequest {
   name: string
-  industry?: string
+  industry?: string | null
   description?: string
   website?: string
 }
