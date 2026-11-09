@@ -88,3 +88,54 @@ def test_legacy_maximum_length_can_be_migrated(db,client):
     assert r.status_code==200,r.text
     assert r.json()['draft']['services']==d['services']
     assert r.json()['draft']['faq']==d['faq']
+
+
+def test_three_image_layouts_privacy_and_snapshot(db,client,monkeypatch,tmp_path):
+    from app.models.asset import Asset
+    from app.config import settings
+    from PIL import Image
+    user,company,h,url=setup(db)
+    monkeypatch.setattr(settings,'LOCAL_STORAGE_PATH',str(tmp_path))
+    monkeypatch.setattr(geo,'index_site',lambda *a:None)
+    ids=[]
+    for i in range(4):
+        Image.new('RGB',(300,200),(30+i*30,100,80)).save(tmp_path/f'{i}.png')
+        a=Asset(company_id=company.id,uploaded_by=user.id,name=f'图{i}',original_filename=f'{i}.png',file_key=f'{i}.png',file_url=f'/files/{i}.png',asset_type='image',mime_type='image/png',file_size_bytes=100,processing_status='ready')
+        db.add(a);db.flush();ids.append(str(a.id))
+    db.commit()
+    d=content();d.update(cover_asset_id=ids[0],gallery_asset_ids=ids[1:3],template='gallery')
+    for code,layout in [('generic','classic'),('gallery','editorial'),('poster','poster')]:
+        d['template']=code
+        r=client.post(url+'/preview',headers=h,json=d)
+        assert r.status_code==200,r.text
+        assert 'class="layout-'+layout+'"' in r.text
+        assert r.text.count('<img ')==3
+        assert '发现企业' not in r.text and '登录工作台' not in r.text and '企业服务</a>' not in r.text
+        assert '主页技术支持' in r.text
+    assert client.put(url+'/draft',headers=h,json={'expected_revision':0,'content':d}).status_code==200
+    slug='images-'+str(company.id)[:10]
+    assert client.post(url+'/publish',headers=h,json={'expected_revision':1,'slug':slug}).status_code==200
+    assert client.get('/shop/'+slug+'/media/'+ids[1]).status_code==200
+    assert client.get('/shop/'+slug+'/media/'+ids[3]).status_code==404
+    # A private draft change does not expose its image until publishing.
+    d['gallery_asset_ids']=[ids[3]]
+    assert client.put(url+'/draft',headers=h,json={'expected_revision':2,'content':d}).status_code==200
+    assert client.get('/shop/'+slug+'/media/'+ids[3]).status_code==404
+    assert client.get('/shop/'+slug+'/media/'+ids[1]).status_code==200
+    _,_,otherh,otherurl=setup(db)
+    assert client.post(otherurl+'/preview',headers=otherh,json=d).status_code==422
+    assert client.put(otherurl+'/draft',headers=otherh,json={'expected_revision':0,'content':d}).status_code==422
+    assert client.post(url+'/withdraw',headers=h).status_code==200
+    assert client.get('/shop/'+slug+'/media/'+ids[1]).status_code==404
+
+
+def test_admin_add_layout_template(db,client):
+    user,_,h,url=setup(db)
+    user.is_platform_admin=True;db.commit()
+    r=client.put('/api/v1/admin/geo-templates/new-style',headers=h,json={'name':'新风格','layout':'editorial','expected_revision':0})
+    assert r.status_code==200,r.text
+    templates=client.get(url,headers=h).json()['templates']
+    assert next(t for t in templates if t['code']=='new-style')['config']['layout']=='editorial'
+    d=content();d['template']='new-style'
+    assert 'layout-editorial' in client.post(url+'/preview',headers=h,json=d).text
+    assert client.put('/api/v1/admin/geo-templates/invalid-layout',headers=h,json={'name':'无效','layout':'arbitrary-html'}).status_code==422

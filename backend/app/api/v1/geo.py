@@ -44,6 +44,7 @@ class Content(BaseModel):
     faq_items: list[FAQItem] | None = Field(None, max_length=20)
     template: str = Field('generic',max_length=64)
     cover_asset_id: str = Field("",max_length=36)
+    gallery_asset_ids: list[uuid.UUID] = Field(default_factory=list,max_length=2)
     brand_color: str = Field('#c05929',pattern=r'^#[0-9a-fA-F]{6}$')
     module_order: list[Literal['description','services','faq']] = Field(default_factory=lambda:['description','services','faq'],min_length=3,max_length=3)
     show_services: bool = True
@@ -85,6 +86,7 @@ class TemplateData(BaseModel):
     intro: str = Field('企业介绍',max_length=60)
     services: str = Field('产品与服务',max_length=60)
     faq: str = Field('常见问题',max_length=60)
+    layout: Literal['classic','editorial','poster'] = 'classic'
     accent: str = Field('#c05929',pattern=r'^#[0-9a-fA-F]{6}$')
 
 @router.get('/companies/{company_id}/geo')
@@ -97,7 +99,7 @@ def read(company_id:uuid.UUID,_:User=Depends(require_permission(Permission.COMPA
     codes=list(dict.fromkeys([*service.DEFAULTS, *[t.code for t in db.query(GeoTemplate).all()]]))
     result['templates']=[service.template_snapshot(db,code) for code in codes]
     for t in result['templates']:
-        if t['name']==t['code'] and t['code'] in service.DEFAULTS:t['name']='通用企业' if t['code']=='generic' else '酒旅'
+        if t['name']==t['code'] and t['code'] in ('generic','travel'):t['name']='通用企业' if t['code']=='generic' else '酒旅'
     return result
 
 def checked_cover(db, company_id, asset_id):
@@ -117,6 +119,7 @@ def preview_response(db,company_id,content):
     d['template_snapshot']=service.template_snapshot(db,d.get('template','generic'))
     asset=checked_cover(db,company_id,d.get('cover_asset_id',''))
     if asset:d['_preview_cover_url']=AssetResponse.model_validate(asset).model_dump()['file_url']
+    d['_preview_gallery_urls']=[AssetResponse.model_validate(checked_cover(db,company_id,str(a))).model_dump()['file_url'] for a in d.get('gallery_asset_ids',[])]
     site=service.site_for(db,company_id) or SimpleNamespace(slug=None,published_at=None,company_id=company_id)
     return render_site(site,d,preview=True)
 
@@ -135,6 +138,7 @@ def draft(company_id:uuid.UUID,data:Draft,user:User=Depends(require_permission(P
     site=service.site_for(db,company_id,True)
     if site.revision!=data.expected_revision:raise HTTPException(409,'内容已变化，请重新加载')
     checked_cover(db,company_id,data.content.cover_asset_id)
+    for asset_id in data.content.gallery_asset_ids:checked_cover(db,company_id,str(asset_id))
     service.template_snapshot(db,data.content.template)
     if len(set(data.content.module_order))!=3:raise HTTPException(422,'每个模块只能出现一次')
     site.draft=data.content.model_dump(mode='json')
@@ -203,6 +207,16 @@ def event(data:Event,request:Request,db:Session=Depends(get_db)):
     service.event(db,data.site_id,str(data.event_id),data.kind,data.referrer,data.visitor,'bot' if bot else ('self_test' if data.self_test else 'unknown'))
     return {'accepted':True}
 
+def admin_templates(db):
+    codes=list(dict.fromkeys([*service.DEFAULTS,*[t.code for t in db.query(GeoTemplate).all()]]))
+    items=[]
+    for code in codes:
+        t=service.template_snapshot(db,code)
+        if t['name']==code and code in ('generic','travel'):t['name']='通用企业' if code=='generic' else '酒旅'
+        if not db.get(GeoTemplate,code):t['revision']=0
+        items.append(t)
+    return items
+
 @router.get('/admin/geo')
 def admin(q:str=Query('',max_length=120),page:int=Query(1,ge=1),days:int=Query(30,ge=1,le=90),_:User=Depends(require_platform_admin),db:Session=Depends(get_db)):
     query=db.query(GeoSite,Company).join(Company,Company.id==GeoSite.company_id)
@@ -213,7 +227,7 @@ def admin(q:str=Query('',max_length=120),page:int=Query(1,ge=1),days:int=Query(3
     return {'items':items,'total':query.count(),'page':page,'metrics':service.metrics(db,days=days),
             'homepage_metrics':service.metrics(db,days=days,homepage=True),
             'published':db.query(GeoSite).filter_by(status='published').count(),
-            'templates':[{'code':t.code,'name':t.name,'revision':t.revision,'config':t.config} for t in db.query(GeoTemplate).all()]}
+            'templates':admin_templates(db)}
 
 @router.post('/admin/geo/{site_id}/change')
 def change(site_id:uuid.UUID,data:Change,user:User=Depends(require_platform_admin),db:Session=Depends(get_db)):

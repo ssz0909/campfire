@@ -70,9 +70,14 @@ def public_site(db,slug):
 
 def render_site(site,d,section='',preview=False):
     name=d.get('name','');config=d.get('template_snapshot',{}).get('config',geo.DEFAULTS['generic'])
-    body=('<p class="notice">草稿预览 · 不计入公开访问，尚未发布</p>' if preview else '')+'<p class="eyebrow">'+e(d.get('industry'))+' · '+e(d.get('region'))+'</p><h1>'+e(name)+'</h1><style>.eyebrow{color:'+(d.get('brand_color') or config.get('accent','#c05929'))+'}</style><p class="muted">企业提供并确认 · '+e(str(site.published_at or '')[:10])+' · 非平台独立认证</p>'
-    if preview and d.get('_preview_cover_url'):body+='<img class="cover" src="'+e(d['_preview_cover_url'])+'" alt="'+e(name)+'公开封面">'
-    if d.get('cover_asset_id'):body+='<img class="cover" src="/shop/'+e(site.slug)+'/media/'+e(d['cover_asset_id'])+'" alt="'+e(name)+'公开封面">' if site.slug and not preview else ''
+    from app.services import geo_site_design
+    body='<p class="notice">草稿预览 · 尚未发布</p>' if preview else ''
+    cover_url=d.get('_preview_cover_url','') if preview else ('/shop/'+str(site.slug)+'/media/'+d['cover_asset_id'] if d.get('cover_asset_id') else '')
+    body+='<section class="site-hero"><div class="hero-copy"><p class="eyebrow">'+e(' · '.join(filter(None,[d.get('industry'),d.get('region')])))+'</p><h1>'+e(name)+'</h1><p class="muted">企业提供并确认 · '+e(str(site.published_at or '')[:10])+'</p></div>'
+    if cover_url:body+='<img class="cover" src="'+e(cover_url)+'" alt="'+e(name)+'公开封面">'
+    body+='</section>'
+    gallery=d.get('_preview_gallery_urls',[]) if preview else ['/shop/'+str(site.slug)+'/media/'+str(a) for a in d.get('gallery_asset_ids',[])]
+    if gallery:body+='<div class="photo-pair">'+''.join('<figure><img src="'+e(url)+'" alt="'+e(name)+'展示图片 '+str(i+1)+'" loading="lazy"></figure>' for i,url in enumerate(gallery))+'</div>'
     labels={'description':config.get('intro','企业介绍'),'services':config.get('services','产品与服务'),'faq':config.get('faq','常见问题')}
     for key in d.get('module_order',['description','services','faq']):
         label=labels[key]
@@ -85,11 +90,11 @@ def render_site(site,d,section='',preview=False):
                 else:
                     content=''.join('<article><h3>'+e(i['question'])+'</h3><p class="facts">'+e(i['answer'])+'</p></article>' for i in items)
             else:content='<div class="facts">'+e(d[key])+'</div>'
-            body+='<section class="section"><h2>'+e(label)+'</h2>'+content+'</section>'
+            body+='<section class="section" id="'+key+'"><h2>'+e(label)+'</h2>'+content+'</section>'
 
     if d.get('facts'):
         body+='<section><h2>资质、承诺与有效期</h2>'+''.join('<p><strong>'+e(f['key'])+'：</strong>'+(e(f['value']) if not f.get('valid_until') or f['valid_until']>=datetime.now(timezone.utc).date().isoformat() else '资料已过期，等待企业更新')+'<br><small>来源：'+e(f['source'])+(' · 有效期至 '+e(f['valid_until']) if f.get('valid_until') else '')+'</small></p>' for f in d['facts'])+'</section>'
-    body+='<section class="contact"><h2>位置与联系</h2><p class="facts">'+e(d.get('address'))+'</p><details data-contact><summary>查看联系信息</summary><p class="facts">'+e(d.get('contact'))+'</p></details></section><p class="notice">信息由该企业维护；服务与价格请联系企业确认。如有错误，可通过联系信息向企业反馈，或联系营火平台管理员核实。</p>'
+    body+='<section class="contact" id="contact"><h2>位置与联系</h2><p class="facts">'+e(d.get('address'))+'</p><details data-contact><summary>查看联系信息</summary><p class="facts">'+e(d.get('contact'))+'</p></details></section><p class="notice">信息由该企业维护；服务与价格请联系企业确认。如有错误，可通过联系信息向企业反馈，或联系营火平台管理员核实。</p>'
     if not preview:
         if d.get('services') and d.get('show_services',True):body+='<a href="/shop/'+e(site.slug)+'/services">服务详情</a> · '
         if d.get('faq') and d.get('show_faq',True):body+='<a href="/shop/'+e(site.slug)+'/faq">常见问题</a>'
@@ -97,7 +102,8 @@ def render_site(site,d,section='',preview=False):
     if d.get('address'):schema['address']={'@type':'PostalAddress','streetAddress':d['address']}
     if not preview:
         body+='<details><summary>反馈信息错误</summary><form id="feedback-form"><label>请说明不准确信息及核实依据（请勿填写个人敏感信息）<textarea name="message" minlength="10" maxlength="2000" required rows="4"></textarea></label><button>提交给营火管理员</button><span id="feedback-result" role="status"></span></form></details>'
-    return page(name+'｜营火AI企业主页' ,body,'/shop/'+str(site.slug)+('/'+section if section else ''),d.get('description','')[:180],schema,extra='' if preview else script(site.id),preview=preview)
+    rendered=geo_site_design.document(name+'｜企业主页',body,'/shop/'+str(site.slug or 'preview')+('/'+section if section else ''),d.get('description','')[:180],schema,name,config.get('layout','classic'),d.get('brand_color') or config.get('accent'),preview,'' if preview else script(site.id),e)
+    return HTMLResponse(rendered,headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'strict-origin-when-cross-origin'})
 
 def llms_response(content):
     return Response(content, media_type='text/plain', headers={
@@ -142,7 +148,7 @@ def media(slug:str,asset_id:uuid.UUID,db:Session=Depends(get_db)):
     from app.config import settings
     from pathlib import Path
     site=public_site(db,slug)
-    if str(asset_id)!=site.live.get('cover_asset_id'):raise HTTPException(404)
+    if str(asset_id) not in [site.live.get('cover_asset_id'), *site.live.get('gallery_asset_ids',[])]:raise HTTPException(404)
     asset=db.get(Asset,asset_id)
     if not asset or asset.company_id!=site.company_id or asset.is_deleted or asset.asset_type!='image' or asset.mime_type not in ('image/jpeg','image/png','image/webp'):raise HTTPException(404)
     root=Path(settings.LOCAL_STORAGE_PATH).resolve();path=(root/asset.file_key).resolve()

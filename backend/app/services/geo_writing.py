@@ -31,7 +31,7 @@ async def generate(db, content):
     evidence = {k: getattr(content, k) for k in ('name', 'industry', 'region', 'address', 'contact', 'description', 'services', 'faq')}
     evidence['confirmed_information'] = [f.model_dump(mode='json') for f in content.facts if f.status == 'confirmed']
     if not any(evidence[k].strip() for k in ('description', 'services', 'faq')):
-        raise HTTPException(422, '请先填写企业介绍或至少一条真实服务信息，AI才能据此整理')
+        raise HTTPException(422, '请先填写企业介绍，或至少一条真实的产品与服务信息，AI才能据此整理')
     try:
         provider = OpenAIProvider(config=get_llm_settings(db))
         response = await asyncio.wait_for(provider.complete([

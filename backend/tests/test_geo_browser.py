@@ -18,7 +18,7 @@ def test_owner_publish_search_preview_and_admin(db,client,monkeypatch,tmp_path):
     from app.config import settings
     from PIL import Image
     monkeypatch.setattr(settings,'LOCAL_STORAGE_PATH',str(tmp_path))
-    Image.new('RGB',(320,200),'#408878').save(tmp_path/'cover.png')
+    Image.open(Path(__file__).resolve().parents[1]/'app/public_media/hospitality.webp').resize((320,200)).save(tmp_path/'cover.png')
     asset=Asset(company_id=company.id,uploaded_by=user.id,name='图片封面验收',original_filename='cover.png',file_key='cover.png',file_url='/files/cover.png',asset_type='image',mime_type='image/png',file_size_bytes=500,processing_status='ready')
     db.add(asset);db.commit()
     from app.services import geo_writing
@@ -61,6 +61,10 @@ def test_owner_publish_search_preview_and_admin(db,client,monkeypatch,tmp_path):
         expect(page.get_by_role('dialog').get_by_role('img')).to_have_js_property('naturalWidth',320)
         page.get_by_role('button',name='用作封面',exact=True).click()
         expect(page.get_by_role('dialog')).not_to_be_visible()
+        assert page.get_by_label('企业介绍',exact=True).evaluate('(el)=>getComputedStyle(el).resize')=='none'
+        assert page.get_by_role('button',name='AI整理文案',exact=True).bounding_box()['y']>page.get_by_label('产品或服务说明',exact=True).bounding_box()['y']
+        page.get_by_role('button',name='添加展示图片',exact=True).click()
+        page.get_by_role('button',name='添加展示图片',exact=True).last.click()
         page.get_by_role('button',name='AI整理文案',exact=True).click()
         expect(page.get_by_role('dialog')).to_be_visible()
         expect(page.get_by_role('dialog').get_by_text('AI建议服务',exact=True)).to_be_visible()
@@ -70,6 +74,8 @@ def test_owner_publish_search_preview_and_admin(db,client,monkeypatch,tmp_path):
         frame=page.frame_locator('iframe')
         expect(frame.get_by_role('heading',name='目的地与体验',exact=True)).to_be_visible()
         expect(frame.get_by_role('img',name='浏览器验收企业公开封面')).to_have_js_property('naturalWidth',320)
+        expect(frame.get_by_role('link',name='发现企业',exact=True)).to_have_count(0)
+        expect(frame.get_by_role('link',name='登录工作台',exact=True)).to_have_count(0)
         page.get_by_role('button',name='收起预览',exact=True).click()
         page.get_by_text('资质、承诺与有效期（选填）',exact=True).click()
         page.get_by_role('button',name='＋ 添加补充信息',exact=True).click()
@@ -90,6 +96,20 @@ def test_owner_publish_search_preview_and_admin(db,client,monkeypatch,tmp_path):
         expect(page.get_by_role('status')).to_have_text('主页发布成功，已进入站内搜索')
         expect(page.get_by_label('公开网址标识')).to_be_disabled()
         page.screenshot(path='/tmp/campfire-geo-editor.png',full_page=True)
+        for style in ['画册展示','品牌海报']:
+            page.get_by_label(style,exact=True).check()
+            page.get_by_role('button',name='预览草稿',exact=True).click()
+            expect(page.frame_locator('iframe').get_by_role('heading',name='浏览器验收企业',exact=True)).to_be_visible()
+            html=page.frame_locator('iframe').locator('html').evaluate('(el)=>el.outerHTML')
+            standalone=context.new_page()
+            standalone.set_content(html.replace('<head>','<head><base href="https://campfire.dawoai.com/">',1))
+            expect(standalone.get_by_role('img',name='浏览器验收企业公开封面')).to_have_js_property('naturalWidth',320)
+            standalone.screenshot(path='/tmp/geo-style-'+('editorial' if style=='画册展示' else 'poster')+'.png',full_page=True)
+            standalone.set_viewport_size({'width':390,'height':844})
+            assert standalone.evaluate('document.documentElement.scrollWidth<=innerWidth')
+            standalone.screenshot(path='/tmp/geo-style-'+('editorial' if style=='画册展示' else 'poster')+'-mobile.png',full_page=True)
+            standalone.close()
+            page.get_by_role('button',name='收起预览',exact=True).click()
         page.reload()
         expect(page.get_by_label('公开网址标识')).to_be_disabled()
         page.goto('https://campfire.dawoai.com/search?q=浏览器验收企业')

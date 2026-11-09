@@ -20,6 +20,10 @@ DEFAULTS = {
  'travel': {'intro':'目的地与体验','services':'住宿与游览服务','faq':'出行与服务问答','accent':'#28766a'},
 }
 
+from app.services.geo_site_design import TEMPLATES
+for _code,_template in TEMPLATES.items():
+    DEFAULTS[_code]={**DEFAULTS['generic'],**{k:v for k,v in _template.items() if k!='name'}}
+
 def site_for(db, company_id, create=False):
     site = db.query(GeoSite).filter_by(company_id=company_id).with_for_update().first()
     if not site and create:
@@ -51,7 +55,7 @@ def validate(content):
 def template_snapshot(db, code):
     t=db.get(GeoTemplate,code)
     if not t and code not in DEFAULTS: raise HTTPException(422,'模板不存在')
-    return {'code':code,'revision':t.revision if t else 1,'name':t.name if t else code,
+    return {'renderer_version':1,'code':code,'revision':t.revision if t else 1,'name':t.name if t else TEMPLATES.get(code,{}).get('name',code),
             'config':t.config if t else DEFAULTS[code]}
 
 def describe(site):
@@ -78,12 +82,9 @@ def publish(db,site,user,expected,slug):
         if registry: raise HTTPException(409,'网址已被占用')
         site.slug=slug
         db.add(GeoSlug(slug=slug,site_id=site.id))
-    cover=site.draft.get('cover_asset_id')
-    if cover:
-        from app.models.asset import Asset
-        asset=db.get(Asset,uuid.UUID(cover))
-        if not asset or asset.company_id!=site.company_id or asset.is_deleted or asset.asset_type!='image' or asset.mime_type not in ('image/jpeg','image/png','image/webp'):
-            raise HTTPException(422,'封面素材已失效，请重新选择后发布')
+    from app.api.v1.geo import checked_cover
+    for asset_id in [site.draft.get('cover_asset_id'), *site.draft.get('gallery_asset_ids',[])]:
+        checked_cover(db,site.company_id,asset_id)
     content=dict(site.draft)
     content['template_snapshot']=template_snapshot(db,content.get('template','generic'))
     site.revision+=1
