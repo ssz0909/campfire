@@ -36,6 +36,7 @@
       </template>
     </div>
 
+    <GeoMetrics v-if="companyId" :company-id="companyId" />
     <WorkMetrics v-if="companyId" :company-id="companyId" style="margin-bottom:24px" />
     <div class="dashboard-grid">
       <!-- Recent tasks -->
@@ -177,6 +178,7 @@ import { useAuthStore } from '@/stores/auth'
 import { tasksApi } from '@/api/tasks'
 import { approvalsApi } from '@/api/approvals'
 import { digitalEmployeesApi } from '@/api/digitalEmployees'
+import GeoMetrics from '@/views/geo/GeoMetrics.vue'
 import WorkMetrics from '@/components/publishing/WorkMetrics.vue'
 import { analyticsApi } from '@/api/analytics'
 import type { OperationTask } from '@/types/task'

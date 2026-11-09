@@ -130,6 +130,7 @@
           />
         </section>
         <ModelSettings v-if="activeTab === 'models'" />
+        <GeoAdmin v-if="activeTab === 'geo'" />
         <IndustryTemplates v-if="activeTab === 'industries'" />
       </main>
     </div>
@@ -187,6 +188,7 @@ import {
   AddOutline, SearchOutline,
 } from '@vicons/ionicons5'
 import ModelSettings from './ModelSettings.vue'
+import GeoAdmin from './GeoAdmin.vue'
 import IndustryTemplates from './IndustryTemplates.vue'
 import AppBadge from '@/components/common/AppBadge.vue'
 import { useAuthStore } from '@/stores/auth'
@@ -234,8 +236,9 @@ interface AdminCompany {
 const router = useRouter()
 const authStore = useAuthStore()
 
-const activeTab = ref<'overview' | 'users' | 'companies' | 'models' | 'industries'>('overview')
+const activeTab = ref<'overview' | 'users' | 'companies' | 'models' | 'industries' | 'geo'>('overview')
 const tabs = [
+  { key: 'geo' as const, label: 'GEO运营数据', icon: BusinessOutline },
   { key: 'models' as const, label: '大模型配置', icon: BarChartOutline },
   { key: 'industries' as const, label: '行业模板', icon: BusinessOutline },
   { key: 'overview' as const, label: '概览', icon: BarChartOutline },

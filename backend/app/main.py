@@ -58,7 +58,7 @@ def health_check():
     return {"status": "ok", "environment": settings.ENVIRONMENT}
 
 
-@app.get("/", tags=["system"])
+@app.get("/api-info", tags=["system"])
 def root():
     return {"message": "营火AI API", "docs": "/docs"}
 
@@ -80,3 +80,6 @@ def serve_signed_file(token: str):
     if not path.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
     return FileResponse(path)
+
+from app.api.geo_public import router as geo_public_router
+app.include_router(geo_public_router)

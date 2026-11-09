@@ -40,6 +40,11 @@ class Settings(BaseSettings):
 
     # LLM
     LLM_API_KEY: str = ""
+    GEO_SEMANTIC_SEARCH_ENABLED: bool = False
+    EMBEDDING_BASE_URL: str = ""
+    EMBEDDING_MODEL: str = ""
+    EMBEDDING_API_KEY: str = ""
+
     LLM_BASE_URL: str = ""
     LLM_MODEL: str = ""
     LLM_TIMEOUT_SECONDS: float = 300

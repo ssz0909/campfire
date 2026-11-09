@@ -3,6 +3,7 @@ import { useAuthStore } from '@/stores/auth'
 import AppLayout from '@/layouts/AppLayout.vue'
 
 const routes: RouteRecordRaw[] = [
+  { path: '/', beforeEnter: () => { window.location.assign('/'); return false }, component: () => import('@/views/auth/LoginView.vue'), meta: { requiresAuth: false, requiresCompany: false } },
   // Auth routes — no layout
   {
     path: '/login',
@@ -39,9 +40,9 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/',
     component: AppLayout,
-    redirect: '/dashboard',
     meta: { requiresAuth: true, requiresCompany: true },
     children: [
+      { path: 'geo', name: 'Geo', component: () => import('@/views/geo/GeoView.vue') },
       {
         path: 'dashboard',
         name: 'Dashboard',

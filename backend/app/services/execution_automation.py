@@ -181,6 +181,8 @@ def tick():
                 connection.commit()
                 if not locked:return
             with SessionLocal() as db:
+                from app.services.geo import maintenance
+                maintenance(db)
                 from app.services.execution_loop import dispatch_queued_publications
                 _dispatch_scheduled_tasks(db)
                 dispatch_queued_publications(db)

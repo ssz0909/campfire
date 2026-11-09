@@ -40,3 +40,5 @@ __all__ = [
     "Subscription",
     "UsageRecord",
 ]
+
+from app.models.geo import GeoSite, GeoSlug, GeoVersion, GeoTemplate, GeoEvent, GeoDaily, GeoVisitor, GeoFeedback

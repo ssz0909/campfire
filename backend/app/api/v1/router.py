@@ -37,3 +37,6 @@ router.include_router(connectors.router, prefix="/companies", tags=["connectors"
 router.include_router(analytics.router, prefix="/companies", tags=["analytics"])
 router.include_router(publishing.router, prefix="/companies", tags=["publishing"])
 router.include_router(callbacks.router, tags=["callbacks"])
+
+from app.api.v1 import geo
+router.include_router(geo.router, tags=["geo"])

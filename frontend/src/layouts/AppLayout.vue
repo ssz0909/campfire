@@ -232,6 +232,7 @@ interface NavItem {
 
 const navItems = computed<NavItem[]>(() => [
   { to: '/dashboard', label: t('Dashboard'), icon: SpeedometerOutline },
+  { to: '/geo', label: 'GEO · 企业主页', icon: SpeedometerOutline },
   { to: '/employees', label: t('Employees'), icon: PeopleOutline },
   { to: '/tasks', label: t('Tasks'), icon: FlashOutline },
   { to: '/assets', label: t('Assets'), icon: ImagesOutline },
