@@ -72,3 +72,12 @@
 - 插画由后端固定白名单路由提供，无外部图片依赖；SVG尺寸、延迟加载及图片说明齐全。工作台示意不是实际产品截图。
 
 - 视觉首页已部署至 `/opt/campfire/releases/visual-home-20261109T132228Z`；备份及回退脚本位于 `/opt/campfire/backups/before-visual-home-20261109T132228Z/rollback.sh`。相关12项回归测试通过。
+
+
+## 首页摄影图片替换
+
+- 将行业场景SVG插画替换为Unsplash的酒店、菜品和工作空间摄影图片；使用优化WebP本地文件，不依赖外部图片实时加载。
+- 图片出处及许可参考记录于 `backend/app/public_media/SOURCES.md`。图片展示行业场景，不代表入驻客户案例；保留功能示意标注。
+- 根页面、手机裁切及图片加载回归12项通过。
+
+- 摄影首页部署至 `/opt/campfire/releases/photo-home-20261109T133142Z`；备份及回退脚本位于 `/opt/campfire/backups/before-photo-home-20261109T133142Z/rollback.sh`。

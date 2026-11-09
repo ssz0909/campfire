@@ -38,10 +38,10 @@ def cards(result):
 @router.get('/public-media/{filename}')
 def public_media(filename:str):
     from pathlib import Path
-    if filename not in ('landscape.svg','food.svg','studio.svg'):
+    if filename not in ('landscape.svg','food.svg','studio.svg','hospitality.webp','dining.webp','workspace.webp'):
         raise HTTPException(404)
     return FileResponse(Path(__file__).resolve().parents[1]/'public_media'/filename,
-                        media_type='image/svg+xml',headers={'Cache-Control':'public, max-age=3600','X-Content-Type-Options':'nosniff'})
+                        media_type='image/webp' if filename.endswith('.webp') else 'image/svg+xml',headers={'Cache-Control':'public, max-age=3600','X-Content-Type-Options':'nosniff'})
 
 
 @router.get('/',response_class=HTMLResponse)
