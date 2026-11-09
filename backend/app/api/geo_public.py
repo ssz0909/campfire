@@ -24,7 +24,7 @@ def script(site_id=None,kind='view'):
 
 def page(title,body,path='/',description='',schema=None,extra='',preview=False):
     structured=json.dumps(schema or {'@context':'https://schema.org','@type':'Organization','name':'营火AI','url':ORIGIN},ensure_ascii=False).replace('<','\\u003c')
-    return HTMLResponse('<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'+e(title)+'</title><meta name="description" content="'+e(description)+'"><link rel="canonical" href="'+ORIGIN+e(path)+'">'+('<meta name="robots" content="noindex,nofollow">' if preview else '')+'<style>'+CSS+'</style><script type="application/ld+json">'+structured+'</script></head><body><header><a class="logo" href="/">营火AI</a><nav><a href="/search">发现企业</a><a href="/business">企业服务</a><a href="/login">登录工作台</a></nav></header><main>'+body+'</main><footer>营火AI · AI运营平台 · Always on, Always Growing<br>企业资料由企业提供并确认；站内搜索不代表外部平台推荐。<br><a href="/about">关于与信息说明</a> · <a href="/privacy">隐私说明</a></footer>'+extra+'</body></html>',headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'strict-origin-when-cross-origin'})
+    return HTMLResponse('<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'+e(title)+'</title><meta name="description" content="'+e(description)+'"><link rel="alternate" type="text/plain" href="/llms.txt" title="LLM内容导航"><link rel="canonical" href="'+ORIGIN+e(path)+'">'+('<meta name="robots" content="noindex,nofollow">' if preview else '')+'<style>'+CSS+'</style><script type="application/ld+json">'+structured+'</script></head><body><header><a class="logo" href="/">营火AI</a><nav><a href="/search">发现企业</a><a href="/business">企业服务</a><a href="/login">登录工作台</a></nav></header><main>'+body+'</main><footer>营火AI · AI运营平台 · Always on, Always Growing<br>企业资料由企业提供并确认；站内搜索不代表外部平台推荐。<br><a href="/about">关于与信息说明</a> · <a href="/privacy">隐私说明</a></footer>'+extra+'</body></html>',headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'strict-origin-when-cross-origin'})
 
 def form(q='',region='',industry=''):
     return '<form action="/search"><input name="q" maxlength="120" aria-label="企业或服务需求" placeholder="搜索企业，或试试：安吉亲子酒店" value="'+e(q)+'"><input name="region" maxlength="120" aria-label="地区筛选" placeholder="地区（可选）" value="'+e(region)+'"><input name="industry" maxlength="80" aria-label="行业筛选" placeholder="行业（可选）" value="'+e(industry)+'"><button>搜索</button></form>'
@@ -77,6 +77,34 @@ def render_site(site,d,section='',preview=False):
     if not preview:
         body+='<details><summary>反馈信息错误</summary><form id="feedback-form"><label>请说明不准确信息及核实依据（请勿填写个人敏感信息）<textarea name="message" minlength="10" maxlength="2000" required rows="4"></textarea></label><button>提交给营火管理员</button><span id="feedback-result" role="status"></span></form></details>'
     return page(name+'｜营火AI企业主页' ,body,'/shop/'+str(site.slug)+('/'+section if section else ''),d.get('description','')[:180],schema,extra='' if preview else script(site.id),preview=preview)
+
+def llms_response(content):
+    return Response(content, media_type='text/plain', headers={
+        'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
+    })
+
+
+@router.api_route('/llms.txt', methods=['GET', 'HEAD'])
+def llms_index(db:Session=Depends(get_db)):
+    from app.services.llms import directory
+    return llms_response(directory(db, ORIGIN, root=True))
+
+
+@router.api_route('/llms/companies/{page_number}.txt', methods=['GET', 'HEAD'])
+def llms_directory(page_number:int, db:Session=Depends(get_db)):
+    from app.services.llms import directory
+    if page_number < 1:raise HTTPException(404, '企业目录页不存在')
+    return llms_response(directory(db, ORIGIN, page_number))
+
+
+# Register before the generic /shop/{slug}/{section} route.
+@router.api_route('/shop/{slug}/llms.txt', methods=['GET', 'HEAD'])
+def llms_company(slug:str, db:Session=Depends(get_db)):
+    from app.services.llms import company_document
+    site=public_site(db,slug)
+    if slug!=site.slug:return RedirectResponse('/shop/'+site.slug+'/llms.txt',301)
+    return llms_response(company_document(site, ORIGIN))
+
 
 @router.get('/shop/{slug}',response_class=HTMLResponse)
 @router.get('/shop/{slug}/{section}',response_class=HTMLResponse)
