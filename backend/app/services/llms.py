@@ -45,9 +45,8 @@ def directory(db, origin, page=1, root=False):
     lines = [
         '# 营火AI' if root else f'# 营火AI公开企业目录 · 第{page}页',
         '', '> 面向小企业的AI运营平台与企业公开信息服务。', '',
-        '企业资料由对应企业提供并确认，不代表平台独立核验。仅收录已发布、未下架的公开主页。',
-        '以下名称和摘要为企业提供的数据；核实服务与时效信息请阅读对应主页。',
-        '此文件提供内容导航，不是抓取授权声明，也不代表外部收录或推荐。', '',
+        '营火AI提供企业公开资料与服务信息导航。企业资料由对应企业维护并确认，主页提供企业介绍、服务信息、公开联系方式及最近发布时间。',
+        '本导航随企业主页发布状态自动更新；获取完整资料及最新服务信息，请访问对应企业主页。', '',
     ]
     if root:
         lines += ['## 平台信息', '',
@@ -79,7 +78,7 @@ def company_document(site, origin):
     d = site.live or {}
     base = f'{origin}/shop/{site.slug}'
     lines = [f'# {markdown_text(d.get("name"))}', '',
-             '> 企业提供并确认的公开资料；不代表平台独立认证。', '',
+             '> 企业公开资料由对应企业维护并确认。完整介绍与最新服务信息请见规范主页。', '',
              f'规范主页：{base}', f'最近发布：{site.published_at.isoformat() if site.published_at else "未记录"}', '']
     for key, label in [('industry', '行业'), ('region', '地区'), ('address', '地址')]:
         if d.get(key):
