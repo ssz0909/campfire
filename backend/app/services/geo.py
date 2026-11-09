@@ -194,7 +194,7 @@ def search(db,q,region='',industry='',page=1,size=12):
         if q and score<2:continue
         matches.append((score,{'site_id':str(site.id),'slug':site.slug,'name':d.get('name'),
            'description':d.get('description'),'region':d.get('region'),'industry':d.get('industry'),
-           'check_result':site.check_result,'url':'/shop/'+site.slug,'updated_at':site.published_at,
+           'check_result':site.check_result,'url':'/shop/'+site.slug,'cover_url':'/shop/'+site.slug+'/media/'+d['cover_asset_id'] if d.get('cover_asset_id') else None,'updated_at':site.published_at,
            'reason':'最新公开资料' if not q else '企业名称匹配' if exact else ('资料包含：'+'、'.join(sorted(hit)[:6]) if hit else '语义相关，请核对企业服务资料')}))
     matches.sort(key=lambda x:x[0],reverse=True)
     return {'items':[r for _,r in matches[(page-1)*size:page*size]],'total':len(matches),'page':page,

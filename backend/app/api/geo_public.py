@@ -33,12 +33,21 @@ def form(q='',region='',industry=''):
 
 def cards(result):
     if not result['items']:return '<div class="public-empty"><div class="company-avatar" aria-hidden="true">↗</div><div><h3>每一家好企业，都值得一个清晰的介绍。</h3><p>暂无匹配的已发布企业，可调整搜索条件。企业发布主页后，会在这里呈现。</p></div></div>'
-    return '<div class="grid">'+''.join('<article class="card"><div class="company-avatar" aria-hidden="true">'+e((i['name'] or '企')[:1])+'</div><span class="tag">'+e(' · '.join(filter(None,[i['region'],i['industry']])) or '企业公开主页')+'</span><h3><a data-site="'+i['site_id']+'" data-token="'+geo.event_token(i['site_id'])+'" href="'+i['url']+'">'+e(i['name'])+'</a></h3><p>'+e(i['description'][:180])+'</p><div class="card-meta"><small>'+e(i['reason'])+'<br>资料更新时间：'+e(str(i['updated_at'])[:10])+'</small></div></article>' for i in result['items'])+'</div>'
+    return '<div class="grid">'+''.join('<article class="card">'+('<img class="enterprise-cover" src="'+e(i['cover_url'])+'" alt="'+e(i['name'])+'公开封面" width="800" height="520" loading="lazy">' if i.get('cover_url') else '<div class="company-avatar" aria-hidden="true">'+e((i['name'] or '企')[:1])+'</div>')+'<span class="tag">'+e(' · '.join(filter(None,[i['region'],i['industry']])) or '企业公开主页')+'</span><h3><a data-site="'+i['site_id']+'" data-token="'+geo.event_token(i['site_id'])+'" href="'+i['url']+'">'+e(i['name'])+'</a></h3><p>'+e(i['description'][:180])+'</p><div class="card-meta"><small>'+e(i['reason'])+'<br>资料更新时间：'+e(str(i['updated_at'])[:10])+'</small></div></article>' for i in result['items'])+'</div>'
+
+@router.get('/public-media/{filename}')
+def public_media(filename:str):
+    from pathlib import Path
+    if filename not in ('landscape.svg','food.svg','studio.svg'):
+        raise HTTPException(404)
+    return FileResponse(Path(__file__).resolve().parents[1]/'public_media'/filename,
+                        media_type='image/svg+xml',headers={'Cache-Control':'public, max-age=3600','X-Content-Type-Options':'nosniff'})
+
 
 @router.get('/',response_class=HTMLResponse)
 def home(db:Session=Depends(get_db)):
     result=geo.search(db,'',size=3)
-    body=public_design.hero()+'<section class="home-discover" id="discover"><div class="section-head"><div><p class="section-kicker">DISCOVER WITH CAMPFIRE</p><h2>发现企业与服务</h2><p>从一个名字、一处目的地，或你正在寻找的服务开始。</p></div><a href="/search">浏览全部企业 <span aria-hidden="true">↗</span></a></div>'+form()+ '<p class="home-scope">营火站内搜索 · 依据企业已发布的公开资料匹配</p>'+cards(result)+'</section>'+public_design.benefits()
+    body=public_design.hero()+public_design.showcase()+'<section class="home-discover" id="discover"><div class="section-head"><div><p class="section-kicker">DISCOVER WITH CAMPFIRE</p><h2>发现企业与服务</h2><p>搜索企业名称，看看它的公开主页。</p></div><a href="/search">浏览全部企业 <span aria-hidden="true">↗</span></a></div>'+form()+ '<p class="home-scope">营火站内搜索 · 依据企业已发布的公开资料匹配</p>'+cards(result)+'</section>'+public_design.benefits()
     return page('营火AI｜AI运营平台',body,description='营火AI为小企业提供数字员工、内容制作、多账号发布、企业公开主页与效果统计。',extra=script())
 
 @router.get('/search',response_class=HTMLResponse)

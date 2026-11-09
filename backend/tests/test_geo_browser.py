@@ -56,6 +56,11 @@ def test_owner_publish_search_preview_and_admin(db,client,monkeypatch):
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
         page.screenshot(path='/tmp/campfire-geo-mobile.png',full_page=True)
         page.goto('https://campfire.dawoai.com/')
+        expect(page.get_by_role('heading',name='让客户一眼看懂你的好。')).to_be_visible()
+        for img in page.locator('img').all():
+            img.scroll_into_view_if_needed()
+            expect(img).to_have_js_property('complete',True)
+            assert img.evaluate('(el)=>el.naturalWidth>0')
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
         page.screenshot(path='/tmp/campfire-geo-home.png',full_page=True)
         page.set_viewport_size({'width':1440,'height':1000})
