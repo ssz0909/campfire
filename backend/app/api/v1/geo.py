@@ -4,7 +4,7 @@ from datetime import date
 import re
 from datetime import datetime, timezone
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.core.permissions import require_permission, Permission
@@ -23,6 +23,14 @@ class Fact(BaseModel):
     status: Literal['pending','confirmed'] = 'pending'
     valid_until: date | None = None
 
+class ServiceItem(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    description: str = Field(min_length=1, max_length=6000)
+
+class FAQItem(BaseModel):
+    question: str = Field(min_length=1, max_length=200)
+    answer: str = Field(min_length=1, max_length=6000)
+
 class Content(BaseModel):
     name: str = Field('',max_length=120)
     description: str = Field('',max_length=6000)
@@ -32,6 +40,8 @@ class Content(BaseModel):
     contact: str = Field('',max_length=300)
     services: str = Field('',max_length=6000)
     faq: str = Field('',max_length=6000)
+    service_items: list[ServiceItem] | None = Field(None, max_length=20)
+    faq_items: list[FAQItem] | None = Field(None, max_length=20)
     template: str = Field('generic',max_length=64)
     cover_asset_id: str = Field("",max_length=36)
     brand_color: str = Field('#c05929',pattern=r'^#[0-9a-fA-F]{6}$')
@@ -40,6 +50,21 @@ class Content(BaseModel):
     show_faq: bool = True
     facts: list[Fact] = Field(default_factory=list,max_length=30)
     confirmed: bool = False
+
+    @model_validator(mode='after')
+    def structured_text(self):
+        # Preserve legacy paragraphs when arrays are absent. Explicit [] clears a module.
+        if self.service_items is not None:
+            self.services = '\n\n'.join(i.name + '：' + i.description for i in self.service_items)
+            if len(self.service_items)==1 and self.service_items[0].name=='产品与服务':self.services=self.service_items[0].description
+        if self.faq_items is not None:
+            self.faq = '\n\n'.join('问：' + i.question + '\n答：' + i.answer for i in self.faq_items)
+            if len(self.faq_items)==1 and self.faq_items[0].question=='常见问题与回答':self.faq=self.faq_items[0].answer
+        if len(self.services) > 6000 or len(self.faq) > 6000:
+            raise ValueError('服务或问答模块总文字不能超过6000字')
+        if len(set(self.module_order)) != 3:
+            raise ValueError('每个模块只能出现一次')
+        return self
 
 class Draft(BaseModel):
     expected_revision: int
@@ -69,19 +94,47 @@ def read(company_id:uuid.UUID,_:User=Depends(require_permission(Permission.COMPA
     result=service.describe(service.site_for(db,company_id))
     result['suggestion']={'name':company.name,'description':company.description or '', 'industry':company.industry or ''}
     result['suggested_slug']=company.slug if service.slug_valid(company.slug) else ''
-    result['templates']=[{'code':t.code,'name':t.name,'revision':t.revision} for t in db.query(GeoTemplate).all()] or [{'code':k,'name':'通用企业' if k=='generic' else '酒旅','revision':1} for k in service.DEFAULTS]
+    codes=list(dict.fromkeys([*service.DEFAULTS, *[t.code for t in db.query(GeoTemplate).all()]]))
+    result['templates']=[service.template_snapshot(db,code) for code in codes]
+    for t in result['templates']:
+        if t['name']==t['code'] and t['code'] in service.DEFAULTS:t['name']='通用企业' if t['code']=='generic' else '酒旅'
     return result
+
+def checked_cover(db, company_id, asset_id):
+    if not asset_id:return None
+    from app.models.asset import Asset
+    try: asset=db.get(Asset,uuid.UUID(asset_id))
+    except ValueError:raise HTTPException(422,'封面素材ID无效')
+    if not asset or asset.company_id!=company_id or asset.is_deleted or asset.asset_type!='image' or asset.mime_type not in ('image/jpeg','image/png','image/webp'):
+        raise HTTPException(422,'请从本企业选择有效的JPG、PNG或WebP图片')
+    return asset
+
+def preview_response(db,company_id,content):
+    from app.api.geo_public import render_site
+    from app.schemas.asset import AssetResponse
+    from types import SimpleNamespace
+    d=dict(content)
+    d['template_snapshot']=service.template_snapshot(db,d.get('template','generic'))
+    asset=checked_cover(db,company_id,d.get('cover_asset_id',''))
+    if asset:d['_preview_cover_url']=AssetResponse.model_validate(asset).model_dump()['file_url']
+    site=service.site_for(db,company_id) or SimpleNamespace(slug=None,published_at=None,company_id=company_id)
+    return render_site(site,d,preview=True)
+
+@router.post('/companies/{company_id}/geo/preview')
+def preview_unsaved(company_id:uuid.UUID,data:Content,_:User=Depends(require_permission(Permission.COMPANY_VIEW)),db:Session=Depends(get_db)):
+    return preview_response(db,company_id,data.model_dump(mode='json'))
+
+@router.post('/companies/{company_id}/geo/ai-draft')
+async def ai_draft(company_id:uuid.UUID,data:Content,request:Request,_:User=Depends(require_permission(Permission.COMPANY_EDIT)),db:Session=Depends(get_db)):
+    service.public_limit(request,3)
+    from app.services.geo_writing import generate
+    return await generate(db,data)
 
 @router.put('/companies/{company_id}/geo/draft')
 def draft(company_id:uuid.UUID,data:Draft,user:User=Depends(require_permission(Permission.COMPANY_EDIT)),db:Session=Depends(get_db)):
     site=service.site_for(db,company_id,True)
     if site.revision!=data.expected_revision:raise HTTPException(409,'内容已变化，请重新加载')
-    if data.content.cover_asset_id:
-        from app.models.asset import Asset
-        try: asset=db.get(Asset,uuid.UUID(data.content.cover_asset_id))
-        except ValueError: raise HTTPException(422,'封面素材ID无效')
-        if not asset or asset.company_id!=company_id or asset.is_deleted or asset.asset_type!='image' or asset.mime_type not in ('image/jpeg','image/png','image/webp'):
-            raise HTTPException(422,'请从本企业选择有效的JPG、PNG或WebP图片')
+    checked_cover(db,company_id,data.content.cover_asset_id)
     service.template_snapshot(db,data.content.template)
     if len(set(data.content.module_order))!=3:raise HTTPException(422,'每个模块只能出现一次')
     site.draft=data.content.model_dump(mode='json')
@@ -195,11 +248,9 @@ def template(code:str,data:TemplateData,user:User=Depends(require_platform_admin
 
 @router.get('/companies/{company_id}/geo/preview')
 def preview(company_id:uuid.UUID,_:User=Depends(require_permission(Permission.COMPANY_VIEW)),db:Session=Depends(get_db)):
-    from app.api.geo_public import render_site
     site=service.site_for(db,company_id)
     if not site:raise HTTPException(404,'请先保存草稿')
-    d=dict(site.draft);d['template_snapshot']=service.template_snapshot(db,d.get('template','generic'))
-    return render_site(site,d,preview=True)
+    return preview_response(db,company_id,site.draft)
 
 class Feedback(BaseModel):
     site_id: uuid.UUID

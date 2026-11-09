@@ -71,14 +71,24 @@ def public_site(db,slug):
 def render_site(site,d,section='',preview=False):
     name=d.get('name','');config=d.get('template_snapshot',{}).get('config',geo.DEFAULTS['generic'])
     body=('<p class="notice">草稿预览 · 不计入公开访问，尚未发布</p>' if preview else '')+'<p class="eyebrow">'+e(d.get('industry'))+' · '+e(d.get('region'))+'</p><h1>'+e(name)+'</h1><style>.eyebrow{color:'+(d.get('brand_color') or config.get('accent','#c05929'))+'}</style><p class="muted">企业提供并确认 · '+e(str(site.published_at or '')[:10])+' · 非平台独立认证</p>'
+    if preview and d.get('_preview_cover_url'):body+='<img class="cover" src="'+e(d['_preview_cover_url'])+'" alt="'+e(name)+'公开封面">'
     if d.get('cover_asset_id'):body+='<img class="cover" src="/shop/'+e(site.slug)+'/media/'+e(d['cover_asset_id'])+'" alt="'+e(name)+'公开封面">' if site.slug and not preview else ''
     labels={'description':config.get('intro','企业介绍'),'services':config.get('services','产品与服务'),'faq':config.get('faq','常见问题')}
     for key in d.get('module_order',['description','services','faq']):
         label=labels[key]
         if key in ('services','faq') and not d.get('show_'+key,True):continue
-        if d.get(key) and (not section or key==section):body+='<section class="section"><h2>'+e(label)+'</h2><div class="facts">'+e(d[key])+'</div></section>'
+        if d.get(key) and (not section or key==section):
+            items=d.get('service_items' if key=='services' else 'faq_items') if key!='description' else None
+            if items:
+                if key=='services':
+                    content='<div class="grid">'+''.join('<article class="card"><h3>'+e(i['name'])+'</h3><p>'+e(i['description'])+'</p></article>' for i in items)+'</div>'
+                else:
+                    content=''.join('<article><h3>'+e(i['question'])+'</h3><p class="facts">'+e(i['answer'])+'</p></article>' for i in items)
+            else:content='<div class="facts">'+e(d[key])+'</div>'
+            body+='<section class="section"><h2>'+e(label)+'</h2>'+content+'</section>'
+
     if d.get('facts'):
-        body+='<section><h2>企业确认资料</h2>'+''.join('<p><strong>'+e(f['key'])+'：</strong>'+(e(f['value']) if not f.get('valid_until') or f['valid_until']>=datetime.now(timezone.utc).date().isoformat() else '资料已过期，等待企业更新')+'<br><small>来源：'+e(f['source'])+(' · 有效期至 '+e(f['valid_until']) if f.get('valid_until') else '')+'</small></p>' for f in d['facts'])+'</section>'
+        body+='<section><h2>资质、承诺与有效期</h2>'+''.join('<p><strong>'+e(f['key'])+'：</strong>'+(e(f['value']) if not f.get('valid_until') or f['valid_until']>=datetime.now(timezone.utc).date().isoformat() else '资料已过期，等待企业更新')+'<br><small>来源：'+e(f['source'])+(' · 有效期至 '+e(f['valid_until']) if f.get('valid_until') else '')+'</small></p>' for f in d['facts'])+'</section>'
     body+='<section class="contact"><h2>位置与联系</h2><p class="facts">'+e(d.get('address'))+'</p><details data-contact><summary>查看联系信息</summary><p class="facts">'+e(d.get('contact'))+'</p></details></section><p class="notice">信息由该企业维护；服务与价格请联系企业确认。如有错误，可通过联系信息向企业反馈，或联系营火平台管理员核实。</p>'
     if not preview:
         if d.get('services') and d.get('show_services',True):body+='<a href="/shop/'+e(site.slug)+'/services">服务详情</a> · '
