@@ -3,7 +3,7 @@
     <p v-if="error" role="alert" class="error">{{ error }}</p><p v-if="notice" role="status">{{ notice }}</p><p v-if="loading">正在加载…</p>
     <template v-if="data"><section class="panel"><h2>主页配置 <small>{{ labels[data.status] }}</small></h2>
       <p>当前版本 {{ data.revision }} · 网址在首次发布后锁定，特殊更名请联系平台管理员。</p>
-      <label>公开网址标识<input v-model="slug" :disabled="!!data.slug" maxlength="64" placeholder="例如 yunzhongxi" /></label>
+      <label>公开网址标识<input v-model="slug" :disabled="!!data.slug" maxlength="64" placeholder="例如 my-business" /></label>
       <p v-if="slug">公开地址：/shop/{{ slug }} <button :disabled="busy||!!data.slug" @click="availability">检查是否可用</button></p>
 
       <div class="grid"><label>品牌色<input type="color" v-model="form.brand_color" /></label><label>模块顺序<select v-model="order"><option value="description,services,faq">介绍 → 服务 → 问答</option><option value="description,faq,services">介绍 → 问答 → 服务</option><option value="services,description,faq">服务 → 介绍 → 问答</option></select></label></div><label class="check"><input type="checkbox" v-model="form.show_services"/> 显示服务模块</label><label class="check"><input type="checkbox" v-model="form.show_faq"/> 显示问答模块</label>
@@ -32,7 +32,7 @@ const data=ref<any>(null),form=ref<any>({}),slug=ref(''),versions=ref<any[]>([])
 const previewPanel=ref<HTMLElement>(),previewName=ref(''),mobilePreview=ref(false)
 const order=computed({get:()=>form.value.module_order?.join(',')||'description,services,faq',set:(v:string)=>{form.value.module_order=v.split(',')}})
 const labels:Record<string,string>={draft:'未发布',published:'已发布',withdrawn:'已撤回',blocked:'平台下架'}
-const fields=[{key:'name',label:'公开名称',max:120},{key:'industry',label:'行业（例如 酒旅·住宿）',max:80},{key:'region',label:'地区（例如 浙江 湖州 安吉）',max:120},{key:'address',label:'公开地址',max:300},{key:'contact',label:'公开联系信息',max:300},{key:'description',label:'企业介绍',max:6000,long:true}]
+const fields=[{key:'name',label:'公开名称',max:120},{key:'industry',label:'所属行业',max:80},{key:'region',label:'所在地区（省 / 市 / 区县）',max:120},{key:'address',label:'公开地址',max:300},{key:'contact',label:'公开联系信息',max:300},{key:'description',label:'企业介绍',max:6000,long:true}]
 function apply(d:any){data.value={...data.value,...d}}
 async function load(){if(!companyId.value)return;loading.value=true;error.value='';try{data.value=(await api.get(`/companies/${companyId.value}/geo`)).data;const d=data.value;form.value={name:'',description:'',industry:'',region:'',address:'',contact:'',services:'',faq:'',template:'generic',cover_asset_id:'',brand_color:'#c05929',show_services:true,show_faq:true,module_order:['description','services','faq'],facts:[],confirmed:false,...(Object.keys(d.draft).length?d.draft:d.suggestion)};form.value.service_items??=form.value.services?[{name:'产品与服务',description:form.value.services}]:[];form.value.faq_items??=form.value.faq?[{question:'常见问题与回答',answer:form.value.faq}]:[];slug.value=d.slug||d.suggested_slug||'';await history()}catch(e:any){error.value=e.response?.data?.detail||'加载失败'}finally{loading.value=false}}
 async function history(){const r=await api.get(`/companies/${companyId.value}/geo/versions`,{params:{page:versionPage.value}});versions.value=r.data.items;versionTotal.value=r.data.total}
