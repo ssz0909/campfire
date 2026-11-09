@@ -86,9 +86,12 @@ class OperationsWorkflow:
         selected_assets=[]
         if role=='video_producer':
             from app.services.asset_selection import select_assets_for_video
-            selected_assets=select_assets_for_video(db,company_id,goal,template=template)
             from app.services.video_director import target_duration
             video_duration=target_duration(task.input_params, (task.input_params or {}).get('execution_goal') or goal)
+            import math
+            pool_limit=min(40,max(8,math.ceil(video_duration/2.5)+4))
+            selected_assets=select_assets_for_video(db,company_id,goal,template=template,
+                limit=pool_limit,rotation_key=str(task.id),exclude_task_id=task.id)
             sources['selected_assets']=[{'id':str(a.id),'name':a.name,'category':a.category,'tags':a.tags or [],
                 'width':a.width,'height':a.height, 'description':((a.asset_metadata or {}).get('vision_analysis') or {}).get('visual_description') or a.source_description} for a in selected_assets]
             if (task.input_params or {}).get('reuse_policy', 'fresh') != 'fresh':

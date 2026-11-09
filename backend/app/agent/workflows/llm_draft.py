@@ -78,6 +78,25 @@ class CostDraft(Draft):
     video_storyboard: list[CostShot] = Field(default_factory=list, max_length=12)
 
 
+def draft_context(result):
+    """Avoid sending the full catalog and repeated local drafts to the director."""
+    if result.get('role') != 'video_producer':
+        return result
+    context = {key: value for key, value in result.items() if key not in (
+        'report_markdown', 'video_storyboard', 'industry_template_snapshot')}
+    redundant = {'行业创作配置', '已选素材与镜头顺序', '结构化分镜草稿'}
+    context['sections'] = [section for section in result.get('sections', [])
+                           if section.get('title') not in redundant]
+    sources = dict(result.get('data_sources') or {})
+    # Keep every selected candidate and complete reuse contract. Upstream delivery,
+    # employee constraints, company facts and feedback remain available as well.
+    if sources.get('selected_assets'):
+        sources.pop('assets', None)
+    sources.pop('published_content', None)
+    context['data_sources'] = sources
+    return context
+
+
 def enrich(result, task, runtime, forbidden_words):
     config = get_llm_settings()
     configured = (config["base_url"], config["model"], config["api_key"])
@@ -106,15 +125,20 @@ def enrich(result, task, runtime, forbidden_words):
         system += render_guidance(snapshot)
     if result['role'] == 'video_producer':
         system += COST_DIRECTOR_PROMPT if generation_mode == 'cost' else DIRECTOR_PROMPT
+        system += ('候选图片已按本次任务轮换排序，并对最近视频实际使用的图片降权；同等符合任务时优先靠前候选，'
+            '先覆盖任务指定的不同主题和场景，再选互补细节，不要每次固定选同一组人物、山景和泳池。'
+            '多样性不得覆盖素材事实、清晰度、人物入镜等明确要求；确实只有同一张可满足时允许重选，不虚构新场景。'
+            '全部重新生成指不复用库存视频片段，不意味着生成新的原始参考图片；仍需优先轮换合适的参考图片。')
         if (task.input_params or {}).get('reuse_policy', 'fresh') != 'fresh':
             system += ('当前优先复用已审核分镜。data_sources.reusable_clips列出真实库存；优先选择与本次主题一致且使用次数少的片段。'
                 '计划仍引用contract.source_asset_id对应的图片ID，不用视频ID冒充图片ID。'
                 '复用需保留库存contract中的generation_mode、framing、focal_x、focal_y、camera_movement、visual_description、generation_prompt、opening_frame、closing_frame和subshots，duration_seconds保持retained_duration；'
                 '不要求已有片段执行新的动作；画幅须匹配，保留时长不能超过库存片段。'
                 '淡入淡出依赖相邻镜头，优先使用cut直接剪辑的片段。库存不足时明确缺口，不得声称已经生成或发布。')
+    context_json = json.dumps(draft_context(result), ensure_ascii=False, default=str)
     response = asyncio.run(OpenAIProvider(config=config).complete([
         {'role': 'system', 'content': system},
-        {'role': 'user', 'content': json.dumps(result, ensure_ascii=False, default=str)[:70000]},
+        {'role': 'user', 'content': context_json if result['role'] == 'video_producer' else context_json[:70000]},
     ], max_tokens=12000 if result['role'] == 'video_producer' else 4000))
     text = response.get('content') or ''
     if text.startswith('```'):

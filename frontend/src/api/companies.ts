@@ -22,7 +22,7 @@ export const companiesApi = {
   setVideoBranding(id: string, data: VideoBrandingSettings): Promise<{data: Company}> {
     return apiClient.put(`/companies/${id}/video-branding`, data)
   },
-  setDefaultVideoMusic(id:string,data:{music_asset_id:string|null;music_volume:number;selection_mode?:'fixed'|'random'}):Promise<{data:Company}> {
+  setDefaultVideoMusic(id:string,data:{music_asset_id:string|null;music_volume:number;selection_mode?:'fixed'|'random'|'none'}):Promise<{data:Company}> {
     return apiClient.put(`/companies/${id}/default-video-music`,data)
   },
   setPublishLocation(id: string, data: Record<string, unknown>): Promise<{data: Company}> {

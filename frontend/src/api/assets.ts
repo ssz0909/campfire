@@ -28,6 +28,19 @@ export const assetsApi = {
     return apiClient.post(`/companies/${companyId}/assets/${assetId}/analyze`, null, {timeout:150000})
   },
 
+  regenerateClip(companyId: string, assetId: string, prompt: string, aspectRatio='9:16', requestId: string=crypto.randomUUID()): Promise<{data: {id:string;status:string;prompt:string}}> {
+    return apiClient.post(`/companies/${companyId}/assets/${assetId}/regenerate-clip`, {prompt,aspect_ratio:aspectRatio,request_id:requestId}, {timeout:30000})
+  },
+
+  async relatedClips(companyId:string, assetId:string, page=1):Promise<{data:Asset;items:Asset[];total:number;jobs:Array<{id:string;status:string;error?:string|null}>}> {
+    const response=await apiClient.get(`/companies/${companyId}/assets/${assetId}/clips`, {params:{page,page_size:10}})
+    return {data:response.data.source,items:response.data.items,total:response.data.total,jobs:response.data.jobs||[]}
+  },
+
+  approveClip(companyId: string, assetId: string): Promise<{data: Asset}> {
+    return apiClient.post(`/companies/${companyId}/assets/${assetId}/approve-clip`)
+  },
+
   get(companyId: string, assetId: string): Promise<{ data: Asset }> {
     return apiClient.get(`/companies/${companyId}/assets/${assetId}`)
   },

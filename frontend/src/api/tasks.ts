@@ -14,6 +14,14 @@ export const tasksApi = {
     const res = await apiClient.put<OperationTask>(`/companies/${companyId}/tasks/${taskId}/schedule`, { enabled })
     return { data: normalize(res.data) }
   },
+  async updateSchedule(companyId: string, taskId: string, data: CreateTaskRequest) {
+    const res = await apiClient.put<OperationTask>(`/companies/${companyId}/tasks/${taskId}/schedule-template`, data)
+    return { data: normalize(res.data) }
+  },
+  async runScheduleNow(companyId: string, taskId: string) {
+    const res = await apiClient.post<OperationTask>(`/companies/${companyId}/tasks/${taskId}/run-now`, undefined, { timeout:150000 })
+    return { data: normalize(res.data) }
+  },
   execution(companyId: string, id: string) { return apiClient.get<ExecutionSnapshot>(`/companies/${companyId}/tasks/${id}/execution`) },
   continueExecution(companyId: string, id: string, publish_platforms: string[], publish_account_ids?: string[]) { return apiClient.post<ExecutionSnapshot>(`/companies/${companyId}/tasks/${id}/execution/continue`, { publish_platforms, publish_account_ids }, {timeout:180000}) },
   async create(companyId: string, data: CreateTaskRequest) {

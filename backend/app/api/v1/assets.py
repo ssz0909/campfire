@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.permissions import Permission, require_permission
@@ -15,6 +16,12 @@ from app.config import settings
 from app.utils.pagination import PaginatedResponse
 
 router = APIRouter()
+
+
+class ClipRegenerationRequest(BaseModel):
+    prompt: str = Field(min_length=4, max_length=2000)
+    request_id: uuid.UUID
+    aspect_ratio: str = Field(default='9:16', pattern=r'^(9:16|16:9|1:1)$')
 
 
 def get_asset_service(db: Session = Depends(get_db)) -> AssetService:
@@ -97,6 +104,38 @@ def analyze_asset(company_id: uuid.UUID, asset_id: uuid.UUID,
     _: User = Depends(require_permission(Permission.ASSET_UPLOAD)),
     service: AssetService = Depends(get_asset_service)):
     return service.analyze_image(company_id,asset_id)
+
+
+@router.get("/{company_id}/assets/{asset_id}/clips")
+def related_clips(company_id: uuid.UUID, asset_id: uuid.UUID,
+    page: int = Query(1,ge=1), page_size: int = Query(10,ge=1,le=50),
+    _: User = Depends(require_permission(Permission.ASSET_VIEW)),
+    service: AssetService = Depends(get_asset_service)):
+    asset = service.get_asset(company_id, asset_id)
+    from app.services.asset_clip_regeneration import related
+    source, clips, total, jobs = related(service.db, asset, page, page_size)
+    return {'source':AssetResponse.model_validate(source).model_dump(mode='json'),
+        'items':[AssetResponse.model_validate(a).model_dump(mode='json') for a in clips],
+        'total':total, 'jobs':jobs}
+
+
+@router.post("/{company_id}/assets/{asset_id}/regenerate-clip", status_code=202)
+def regenerate_clip(company_id: uuid.UUID, asset_id: uuid.UUID, data: ClipRegenerationRequest,
+    user: User = Depends(require_permission(Permission.VIDEO_CREATE)),
+    service: AssetService = Depends(get_asset_service)):
+    asset = service.get_asset(company_id, asset_id)
+    from app.services.asset_clip_regeneration import create, render_job
+    return render_job(create(service.db, asset, user.id, data.prompt, data.request_id, data.aspect_ratio))
+
+
+@router.post("/{company_id}/assets/{asset_id}/approve-clip", response_model=AssetResponse)
+def approve_clip(company_id: uuid.UUID, asset_id: uuid.UUID,
+    _: User = Depends(require_permission(Permission.APPROVAL_APPROVE)),
+    service: AssetService = Depends(get_asset_service)):
+    asset = service.get_asset(company_id, asset_id)
+    from app.services.asset_clip_regeneration import approve
+    approve(service.db, asset)
+    return asset
 
 
 @router.get(

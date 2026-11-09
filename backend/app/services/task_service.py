@@ -20,6 +20,13 @@ class TaskService:
         created_by: uuid.UUID,
         data: TaskCreate,
     ) -> OperationTask:
+        task = self._build_task(company_id, created_by, data)
+        self.db.add(task)
+        self.db.commit()
+        self.db.refresh(task)
+        return task
+
+    def _build_task(self, company_id, created_by, data):
         from app.models.digital_employee import DigitalEmployee
         if data.task_type not in {"business_analysis", "marketing_planning", "video_generation", "asset_analysis", "daily_report", "custom"}:
             raise HTTPException(status_code=400, detail="此任务类型尚未实现")
@@ -47,6 +54,9 @@ class TaskService:
         if (data.input_params or {}).get('generation_mode', 'quality') not in ('quality', 'cost'):
             raise HTTPException(422, '视频生成策略仅支持质量优先或成本优先')
         params = configure(data.input_params, (data.input_params or {}).get('goal') or data.title)
+        if 'video_music' in params:
+            from app.services.video_music import task_music_config
+            params['video_music'] = task_music_config(self.db, company_id, params['video_music'])
         from copy import deepcopy
         from app.services.industry_templates import resolve_snapshot, ensure_task_snapshot
         # Snapshots are server-owned; never accept client-supplied prompt snapshots.
@@ -61,7 +71,7 @@ class TaskService:
             require_authority(self.db, company_id, created_by)
         from app.services.publishing_service import resolve_publish_accounts
         params = resolve_publish_accounts(self.db, company_id, params)
-        for key in ('schedule', 'schedule_template_id', 'scheduled_for'):
+        for key in ('schedule', 'schedule_template_id', 'scheduled_for', 'manual_schedule_run'):
             params.pop(key, None)
         if data.schedule:
             if data.parent_task_id:
@@ -83,10 +93,69 @@ class TaskService:
             progress=0,
             execution_log=[],
         )
-        self.db.add(task)
+        return task
+
+    def _schedule_template(self, company_id, task_id):
+        self.get_task(company_id, task_id)
+        task = self.db.query(OperationTask).filter_by(id=task_id, company_id=company_id).with_for_update().populate_existing().one()
+        if task.status not in ('scheduled', 'paused') or not (task.input_params or {}).get('schedule'):
+            raise HTTPException(409, '只能操作有效的定时计划')
+        return task
+
+    def update_schedule(self, company_id, task_id, actor_id, data):
+        from copy import deepcopy
+        task = self._schedule_template(company_id, task_id)
+        if data.parent_task_id:
+            raise HTTPException(400, '定时任务不能引用固定的上游任务')
+        if data.auto_execute:
+            from app.services.auto_execution import require_authority
+            require_authority(self.db, company_id, actor_id)
+        old_params = deepcopy(task.input_params)
+        # Reuse creation validation without inserting a new task or committing.
+        merged = {**old_params, **(data.input_params or {})}
+        candidate = self._build_task(company_id, task.created_by, data.model_copy(update={'input_params': merged}))
+        params = candidate.input_params
+        if merged.get('industry_override') == old_params.get('industry_override') and old_params.get('industry_template_snapshot'):
+            params['industry_template_snapshot'] = old_params['industry_template_snapshot']
+        schedule = {**old_params['schedule'], **params['schedule'], 'enabled': task.status == 'scheduled'}
+        schedule.pop('last_error', None)
+        params['schedule'] = schedule
+        for attr in ('title', 'description', 'task_type', 'digital_employee_id'):
+            setattr(task, attr, getattr(candidate, attr))
+        task.input_params = params
         self.db.commit()
         self.db.refresh(task)
         return task
+
+    def run_schedule_now(self, company_id, task_id, actor_id):
+        from copy import deepcopy
+        from app.services.auto_execution import require_authority
+        from app.services.publishing_service import resolve_publish_accounts
+        task = self._schedule_template(company_id, task_id)
+        active = self.db.query(OperationTask).filter(
+            OperationTask.company_id == company_id,
+            OperationTask.input_params['schedule_template_id'].as_string() == str(task.id),
+            OperationTask.status.in_(['pending', 'queued', 'running', 'waiting_approval', 'waiting_external', 'waiting_retry']),
+        ).first()
+        if active:
+            raise HTTPException(409, '该计划已有未完成的执行任务，请先处理已有任务')
+        params = deepcopy(task.input_params)
+        params.pop('schedule', None)
+        if params.get('auto_execute'):
+            require_authority(self.db, company_id, actor_id)
+        # Validate current employee/account ownership and preserve the frozen template.
+        candidate = self._build_task(company_id, actor_id, TaskCreate(
+            title=task.title, description=task.description, task_type=task.task_type,
+            digital_employee_id=task.digital_employee_id, input_params=params,
+            auto_execute=bool(params.get('auto_execute'))))
+        candidate.input_params = {**resolve_publish_accounts(self.db, company_id, params),
+            'schedule_template_id': str(task.id), 'manual_schedule_run': True,
+            'scheduled_for': datetime.now(timezone.utc).isoformat()}
+        candidate.max_retries = task.max_retries
+        self.db.add(candidate)
+        self.db.commit()
+        self.db.refresh(candidate)
+        return candidate
 
     def get_task(self, company_id: uuid.UUID, task_id: uuid.UUID) -> OperationTask:
         task = (

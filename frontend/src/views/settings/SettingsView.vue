@@ -65,8 +65,8 @@
       </n-tab-pane>
       <n-tab-pane name="video-music" tab="默认视频配乐">
         <AppCard>
-          <p class="tab-desc">数字员工后续创建的视频自动配乐，合成后审核、发布，无需逐条替换。已创建的视频保留原设置；固定音乐模式清空音乐并保存可关闭默认配乐。</p>
-          <n-form-item label="配乐方式"><n-select v-model:value="defaultMusicMode" :options="[{label:'固定一首音乐',value:'fixed'},{label:'从素材库随机选取',value:'random'}]" /></n-form-item>
+          <p class="tab-desc">数字员工后续创建的视频自动配乐，合成后审核、发布，无需逐条替换。已创建的视频保留原设置。选择“不使用配乐（静音）”后，新视频不使用素材库音乐，并移除模型自带音轨。</p>
+          <n-form-item label="配乐方式"><n-select v-model:value="defaultMusicMode" :options="[{label:'固定一首音乐',value:'fixed'},{label:'从素材库随机选取',value:'random'},{label:'不使用配乐（静音）',value:'none'}]" /></n-form-item>
           <MusicPicker v-if="auth.currentCompanyId && defaultMusicMode==='fixed'" :company-id="auth.currentCompanyId" v-model:music-asset-id="defaultMusicId" v-model:music-volume="defaultMusicVolume" />
           <template v-if="defaultMusicMode==='random'">
             <p class="tab-desc">每条新视频从本企业已处理完成的音频中随机选择一首；选定后重试不会换曲。请先在素材库上传音乐，无可用音频时会提示补充。</p>
@@ -274,15 +274,15 @@ async function savePublishLocation(){
 }
 
 const defaultMusicId=ref<string|null>(null),defaultMusicVolume=ref(0.25),savingDefaultMusic=ref(false),defaultMusicMessage=ref('')
-const defaultMusicMode=ref<'fixed'|'random'>('fixed')
+const defaultMusicMode=ref<'fixed'|'random'|'none'>('fixed')
 async function saveDefaultMusic() {
   if(!auth.currentCompanyId)return
   savingDefaultMusic.value=true;defaultMusicMessage.value=''
   try {
     if(!Number.isFinite(defaultMusicVolume.value)||defaultMusicVolume.value<0||defaultMusicVolume.value>1)throw new Error('音量需在0至1之间')
-    await companiesApi.setDefaultVideoMusic(auth.currentCompanyId,{music_asset_id:defaultMusicMode.value==='random'?null:defaultMusicId.value,music_volume:defaultMusicVolume.value,selection_mode:defaultMusicMode.value})
+    await companiesApi.setDefaultVideoMusic(auth.currentCompanyId,{music_asset_id:defaultMusicMode.value==='fixed'?defaultMusicId.value:null,music_volume:defaultMusicVolume.value,selection_mode:defaultMusicMode.value})
     await companyStore.fetchCompany()
-    defaultMusicMessage.value=defaultMusicMode.value==='random'?'已保存，后续数字员工视频将随机选取素材库中的音乐。':defaultMusicId.value?'已保存，后续数字员工自动制作的视频将使用此配乐。':'已关闭默认配乐。'
+    defaultMusicMessage.value=defaultMusicMode.value==='none'?'已保存，后续新视频不添加配乐，模型音轨也会移除。':defaultMusicMode.value==='random'?'已保存，后续数字员工视频将随机选取素材库中的音乐。':defaultMusicId.value?'已保存，后续数字员工自动制作的视频将使用此配乐。':'已关闭默认配乐。'
   } catch(e:any){defaultMusicMessage.value=e.response?.data?.detail||e.message||'保存失败，请重试'}
   finally {savingDefaultMusic.value=false}
 }
@@ -357,7 +357,7 @@ onMounted(async () => {
       catch { brandPreviewError.value='字体列表读取失败，请刷新后重试' }
       finally { loadingBrandFonts.value=false }
     }
-    const music=(goals.default_video_music??{}) as {music_asset_id?:string|null;music_volume?:number;selection_mode?:'fixed'|'random'};
+    const music=(goals.default_video_music??{}) as {music_asset_id?:string|null;music_volume?:number;selection_mode?:'fixed'|'random'|'none'};
     defaultMusicId.value=music.music_asset_id||null;
     defaultMusicVolume.value=music.music_volume??0.25;
     defaultMusicMode.value=music.selection_mode??'fixed';

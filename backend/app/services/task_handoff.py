@@ -61,7 +61,8 @@ def create_video_handoff(db, task):
             selected=[by_id[asset_id] for asset_id in selected_ids]
         else:
             from app.services.industry_templates import ensure_task_snapshot
-            selected=select_assets_for_video(db,task.company_id,goal,template=ensure_task_snapshot(db, task))
+            selected=select_assets_for_video(db,task.company_id,goal,template=ensure_task_snapshot(db, task),
+                rotation_key=str(task.id),exclude_task_id=task.id)
         from app.services.video_director import validate_plan, fallback_plan, target_duration
         duration = target_duration((task.output or {}).get('video_brief') or task.input_params, goal)
         generation_mode = (task.input_params or {}).get('generation_mode', 'quality')

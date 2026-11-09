@@ -8,6 +8,33 @@ from app.models.task import OperationTask
 from app.services.task_handoff import create_handoffs, create_video_handoff
 from tests.conftest import create_test_user, create_test_company
 
+
+def test_video_context_removes_duplicate_catalog_without_losing_instructions():
+    from copy import deepcopy
+    from app.agent.workflows.llm_draft import draft_context
+    result={'role':'video_producer','video_brief':{'target_duration_seconds':15},
+        'industry_template_snapshot':{'code':'travel'},'report_markdown':'重复报告'*10000,
+        'video_storyboard':[{'local':'fallback'}],
+        'sections':[{'title':'任务目标','content':'人物开场，泳池瀑布'},
+                    {'title':'上游任务交付','content':'已审批的创意要求'},
+                    {'title':'岗位执行约束','content':'不得虚构设施'},
+                    {'title':'结构化分镜草稿','content':'重复分镜'}],
+        'data_sources':{'company':{'name':'酒店'},'assets':[{'unselected':'x'*100000}],
+            'selected_assets':[{'id':'image1','description':'真实泳池'}],
+            'reusable_clips':[{'contract':{'source_asset_id':'image1','generation_prompt':'完整生成提示词',
+                                        'subshots':[{'description':'推进'}]},'retained_duration':2.5}],
+            'feedback':{'views':100},'published_content':[{'description':'重复历史发布'*10000}]}}
+    original=deepcopy(result)
+    context=draft_context(result)
+    assert len(json.dumps(context))<len(json.dumps(result))/10
+    assert context['sections']==result['sections'][:3]
+    for key in ('company','selected_assets','reusable_clips','feedback'):
+        assert context['data_sources'][key]==result['data_sources'][key]
+    assert context['video_brief']==result['video_brief']
+    assert result==original
+    assert draft_context({'role':'data_analyst','data_sources':result['data_sources']})['data_sources']==result['data_sources']
+    assert draft_context({'role':'video_producer','data_sources':{'assets':[1]}})['data_sources']['assets']==[1]
+
 @pytest.mark.parametrize('script', [
     '酒店开场\n泳池体验',
     {'title':'酒店短片','scenes':[{'duration':2,'description':'泳池体验'}]},

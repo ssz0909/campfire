@@ -39,6 +39,7 @@ export interface OperationTask {
   digital_employee_id?: string
   employee_id?: string
   title: string
+  description?: string | null
   task_type: TaskType
   status: TaskStatus
   progress: number
@@ -56,6 +57,7 @@ export interface OperationTask {
   updated_at: string
 }
 export interface CreateTaskRequest {
+  description?: string | null
   auto_execute?: boolean
   schedule?: TaskSchedule
   parent_task_id?: string

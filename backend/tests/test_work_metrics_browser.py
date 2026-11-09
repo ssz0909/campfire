@@ -1,10 +1,14 @@
 """Real SPA timing and identity checks; all provider traffic is blocked."""
 import json
+import httpx
 from playwright.sync_api import sync_playwright
 from app.connectors import web_platform as web
 
 
 def test_fresh_read_tab_verifies_delayed_channels_identity_and_201(monkeypatch):
+    client=httpx.Client
+    monkeypatch.setattr(httpx,'Client',lambda **kwargs:client(transport=httpx.MockTransport(
+        lambda request:httpx.Response(201,json={'errCode':0,'data':{'finderUser':{'finderUsername':'bound-hotel'}}})),**kwargs))
     with sync_playwright() as pw:
         browser=pw.chromium.launch(headless=True,args=['--no-sandbox'])
         try:
@@ -25,7 +29,9 @@ def test_fresh_read_tab_verifies_delayed_channels_identity_and_201(monkeypatch):
                     request.fulfill(status=200,content_type='text/html',body=html)
                 else:request.abort()
             context.route('**/*',route)
-            session={'context':context,'page':editor}
+            session={'context':context,'page':editor,'metrics_api_templates':{'identity':{
+                'url':'https://channels.weixin.qq.com/cgi-bin/mmfinderassistant-bin/auth/auth_data',
+                'method':'POST','body':{}}}}
             monkeypatch.setattr(web,'_ensure_open',lambda *args:None)
             monkeypatch.setattr(web,'_save_session',lambda *args:True)
             monkeypatch.setattr(web,'_get_session',lambda *args:session)
@@ -40,6 +46,9 @@ def test_fresh_read_tab_verifies_delayed_channels_identity_and_201(monkeypatch):
 
 
 def test_metrics_read_tab_rejects_other_account_without_changing_saved_editor(monkeypatch):
+    client=httpx.Client
+    monkeypatch.setattr(httpx,'Client',lambda **kwargs:client(transport=httpx.MockTransport(
+        lambda request:httpx.Response(201,json={'errCode':0,'data':{'finderUser':{'finderUsername':'other-account'}}})),**kwargs))
     with sync_playwright() as pw:
         browser=pw.chromium.launch(headless=True,args=['--no-sandbox'])
         try:
@@ -48,7 +57,9 @@ def test_metrics_read_tab_rejects_other_account_without_changing_saved_editor(mo
                 <script>localStorage.setItem('finder_username','other-account')</script></body>'''))
             monkeypatch.setattr(web,'_ensure_open',lambda *args:None)
             monkeypatch.setattr(web,'_save_session',lambda *args:True)
-            monkeypatch.setattr(web,'_get_session',lambda *args:{'context':context,'page':editor})
+            monkeypatch.setattr(web,'_get_session',lambda *args:{'context':context,'page':editor,
+                'metrics_api_templates':{'identity':{'url':'https://channels.weixin.qq.com/cgi-bin/mmfinderassistant-bin/auth/auth_data',
+                'method':'POST','body':{}}}})
             result=web.read_work_metrics.__wrapped__('tenant','wechat_channels',[],expected_account_id='expected')
             assert result['identity_mismatch'] and not result['items']
             assert editor.url=='about:blank' and len(context.pages)==1

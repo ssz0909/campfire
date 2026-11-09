@@ -86,33 +86,32 @@ def _page_text(page, *, timeout=5000):
     return '\n'.join(bodies.nth(i).inner_text(timeout=timeout)
                      for i in range(bodies.count()) if bodies.nth(i).is_visible())
 
+
+_closed_auth_caches = {}
+
+
 def _saved_status(company_id, platform):
     from app.core.secrets import decrypt_json
+    from app.connectors import web_auth
     path = _saved_path(company_id, platform)
     try:
         saved = decrypt_json(path.read_text()) if path.exists() else {}
     except OSError:
-        saved = {}
-    if saved and (platform != 'wechat_channels' or _saved_state_has_auth(saved, platform)):
-        identity = saved.get('account_identity') or {}
-        return {'status': 'session_saved', 'login_required': False, 'browser_open': False,
-                'session_saved': True, 'publish_ready': bool(identity.get('identity_verified')),
-                **identity,
-                'message': '登录会话已保存，窗口已关闭；重新打开或发布时将校验平台登录是否过期'}
-    if saved and platform == 'wechat_channels':
-        path.unlink(missing_ok=True)
-    return {'status': 'disconnected', 'login_required': True, 'browser_open': False}
+        return {**web_auth.pending('无法读取已保存会话，请稍后重试'), 'browser_open': False}
+    if not saved:
+        return {'status': 'disconnected', 'login_required': True, 'browser_open': False,
+                'publish_ready': False, 'auth_state': 'no_session'}
+    key = str(path)
+    if key not in _closed_auth_caches and len(_closed_auth_caches) >= 256:
+        _closed_auth_caches.pop(next(iter(_closed_auth_caches)))
+    cache = _closed_auth_caches.setdefault(key, {})
+    result = web_auth.check(platform, saved.get('cookies') or [],
+        web_auth.template_for(path.parent, platform), cache)
+    if result.get('auth_state') == 'verified':
+        result = {**result, 'status': 'session_saved',
+                  'message': '平台身份接口校验成功，登录会话已保存，发布前将再次校验'}
+    return {**result, 'session_saved': True, 'browser_open': False}
 
-
-def _saved_state_has_auth(saved, platform):
-    """Reject a profile containing only anonymous provider telemetry."""
-    if platform == 'wechat_channels':
-        names = {'finder_uin', 'finder_username', 'finder_raw'}
-        return any(item.get('name') in names and item.get('value') for origin in saved.get('origins', [])
-                   for item in origin.get('localStorage', []))
-    if saved.get('cookies'):
-        return True
-    return False
 
 def browser_operation(function):
     """Own Playwright on one thread and isolate each account's browser profile."""
@@ -209,29 +208,19 @@ def _douyin_account_identity(payload):
             'account_name': str(user.get('nickname') or '')[:255], 'identity_verified': True}
 
 
+def _browser_auth_status(context, platform, session):
+    from app.connectors import web_auth
+    return web_auth.check(platform, context.cookies(),
+        web_auth.template_for(session.get('auth_directory'), platform, session), session)
+
+
 def _account_identity(context, page, platform, session):
-    try:
-        if platform == 'wechat_channels':
-            value = page.evaluate("() => localStorage.getItem('finder_username') || ''")
-            return {'account_fingerprint': _identity_digest(platform, value, 'websha256:'),
-                    'identity_verified': True} if value else {}
-        cookies = context.cookies()
-        value = next((c['value'] for c in cookies if c['name'] == 'uid_tt' and c.get('value')), '')
-        legacy = _identity_digest(platform, value, 'websha256:') if value else None
-        cached = session.get('account_identity') or {}
-        if (cached.get('identity_verified') and cached.get('legacy_account_fingerprint') == legacy
-                and time.monotonic() - session.get('identity_checked_at', 0) < 60):
-            return cached
-        # The API request shares this account's isolated browser cookie jar.
-        response = context.request.get('https://creator.douyin.com/web/api/media/user/info/', timeout=10000)
-        identity = _douyin_account_identity(response.json()) if response.ok else {}
-        if identity:
-            identity['legacy_account_fingerprint'] = legacy
-            session['identity_checked_at'] = time.monotonic()
-            return identity
-    except Exception:
-        pass
-    return {}
+    # Retained as an adapter boundary for metrics readers. DOM/localStorage
+    # account names are never accepted as proof of authentication.
+    state = _browser_auth_status(context, platform, session)
+    return {key: state[key] for key in (
+        'account_fingerprint', 'legacy_account_fingerprint', 'identity_verified', 'account_name')
+        if key in state} if state.get('auth_state') == 'verified' else {}
 
 
 def _account_matches(state, expected):
@@ -390,56 +379,33 @@ def session_status(company_id, platform):
         if page.is_closed():
             close_session(company_id, platform)
             return _saved_status(company_id, platform)
-        text = _page_text(page)[:8000]
-        # These strings are present on the login screen.  Once the account is
-        # logged in they disappear, even though the exact dashboard text varies.
-        login = any(x in text for x in ("扫码登录", "验证码登录", "登录后使用", "登录/注册", "扫码进入", "立即登录"))
-        parsed = urlparse(page.url)
-        expected_host = urlparse(PLATFORM_URLS[platform]).hostname
-        recognised = any(x in text for x in ("作品管理", "内容管理", "发布视频", "发布作品", "数据中心", "创作者中心"))
-        if platform == 'wechat_channels':
-            recognised = recognised or (
-                '视频号ID' in text and any(x in text for x in ('发表视频', '昨日数据', '最近视频'))
-            )
-        authorized = parsed.hostname == expected_host and not login and recognised
-        if authorized and platform == 'wechat_channels':
-            # A dashboard shell can be rendered for anonymous visitors. Require
-            # actual provider auth state before marking it publishable.
-            cookies = session['context'].cookies()
-            local_storage = page.evaluate('() => Object.fromEntries(Object.entries(localStorage))')
-            state = {'cookies': cookies, 'origins': [{'localStorage': [{'name': k, 'value': v} for k, v in local_storage.items()]}]}
-            authorized = _saved_state_has_auth(state, platform)
+        session['auth_directory'] = _profile_dir(company_id, platform)
+        result = _browser_auth_status(session['context'], platform, session)
+        authorized = result.get('auth_state') == 'verified'
+        session['authenticated'] = authorized
         if authorized:
             session.pop('navigation_error', None)
-            session['account_identity'] = _account_identity(session['context'], page, platform, session)
-            session['authenticated'] = True
+            session['account_identity'] = {key: result[key] for key in (
+                'account_fingerprint', 'legacy_account_fingerprint', 'identity_verified', 'account_name') if key in result}
             session['session_saved'] = _save_session(company_id, platform, session)
-        elif login:
-            session['authenticated'] = False
+            result['message'] = ('平台身份接口校验成功，登录会话已保存' if session['session_saved'] else
+                                 '平台身份接口校验成功，但会话保存失败，请暂勿关闭窗口')
+        else:
             session.pop('account_identity', None)
-            _saved_path(company_id, platform).unlink(missing_ok=True)
-        return {"status": "authorized" if authorized else "login_required", "login_required": not authorized, "url": page.url,
-                'session_saved': bool(authorized and session.get('session_saved')), 'browser_open': True,
-                **(session.get('account_identity') or {} if authorized else {}),
-                'publish_ready': bool(authorized and (session.get('account_identity') or {}).get('identity_verified')),
-                'message': ('平台网页登录成功，登录会话已保存' if session.get('session_saved') else '平台网页登录成功，但会话保存失败，请暂勿关闭窗口') if authorized else ('平台页面加载失败，请检查本机网络或代理，恢复后刷新已打开的窗口' if session.get('navigation_error') else '请在平台窗口完成扫码登录')}
-    except Exception as exc:
-        # A slow provider page is still an open login session. Do not downgrade
-        # the connection to disconnected while the QR page is loading.
-        return {"status": "login_required", "login_required": True, "url": page.url,
-                "message": f"平台页面仍在加载，请稍后重试：{type(exc).__name__}"}
+        return {**result, 'url': page.url, 'session_saved': bool(session.get('session_saved')),
+                'browser_open': True}
+    except Exception:
+        from app.connectors.web_auth import pending
+        return {**pending(), 'url': page.url, 'browser_open': True,
+                'session_saved': bool(session.get('session_saved'))}
 
 def _wait_for_account_ready(company_id, platform, session, expected_account_id=None, timeout_ms=15000,
                             status_reader=None):
     """Wait for the restored SPA and a fresh identity before any upload/read."""
     page = session['page']
     deadline = time.monotonic() + timeout_ms / 1000
-    session.pop('identity_checked_at', None)
-    try:
-        page.wait_for_function("() => /作品管理|内容管理|发布视频|发布作品|数据中心|创作者中心|视频号ID|扫码登录|验证码登录/.test(document.body?.innerText || '')",
-            timeout=max(1, timeout_ms))
-    except Exception:
-        pass  # Report the actual status below, including a page that never finishes loading.
+    # Publishing/collection always requires a fresh server-side proof.
+    session.pop('auth_probe', None)
     attempts = max(1, timeout_ms // 500 + 1)
     for attempt in range(attempts):
         state = status_reader() if status_reader else session_status(company_id, platform)
@@ -449,14 +415,8 @@ def _wait_for_account_ready(company_id, platform, session, expected_account_id=N
                 'message':'当前登录账号与已绑定账号不一致，请退出并重新登录原账号'}
         if not state.get('login_required', True) and _account_matches(state, expected_account_id):
             return state
-        try:
-            body = _page_text(page)
-            if state.get('login_required') and any(label in body for label in (
-                    '扫码登录', '验证码登录', '登录后使用', '登录/注册', '扫码进入', '立即登录')):
-                return {**state, 'status':'login_required', 'login_required':True,
-                    'message':'平台登录已失效，请在打开的浏览器窗口完成扫码登录'}
-        except Exception:
-            pass
+        if state.get('auth_state') == 'expired':
+            return state
         remaining = deadline - time.monotonic()
         if remaining <= 0 or attempt == attempts - 1:
             break
@@ -466,14 +426,15 @@ def _wait_for_account_ready(company_id, platform, session, expected_account_id=N
             break
     return {**state, 'status':'login_required', 'login_required':True,
         'publish_ready':False, 'identity_unavailable':True,
-        'message':'平台页面尚未加载完成或暂时无法读取账号身份，未开始上传或提交；请稍后重试，无需退出账号'}
+        'message':'平台身份接口暂未完成校验，未开始上传或提交；请稍后重试，无需退出账号'}
 
 
 @browser_operation
 def publish(company_id, platform, title, description, media_url, location_name=None, geolocation=None, expected_account_id=None):
     _ensure_open(company_id, platform)
     session = _get_session(company_id, platform)
-    if not session: return {"status": "login_required", "message": "请先打开平台 Web 登录窗口并完成扫码登录"}
+    if not session: return {"status": "login_required", "login_required": True, "publish_ready": False,
+                            "message": "请先打开平台 Web 登录窗口并完成扫码登录"}
     page = session["page"]
     state = _wait_for_account_ready(company_id, platform, session, expected_account_id)
     if state.get('login_required', True):
@@ -1383,20 +1344,12 @@ def login_view(company_id, platform, action=None):
 
 
 def _metrics_page_status(platform, session):
-    """Verify the isolated read tab, not the user's editor or stale home tab."""
-    page = session['page']
+    """Verify API identity with this read tab's isolated account cookie jar."""
     try:
-        body = _page_text(page)
-        login = any(label in body for label in ('扫码登录', '验证码登录', '登录后使用', '登录/注册', '扫码进入', '立即登录'))
-        recognised = any(label in body for label in ('作品管理', '内容管理', '发布视频', '发布作品',
-            '数据中心', '创作者中心', '视频号ID', '最近视频', '发表视频'))
-        host_matches = urlparse(page.url).hostname == urlparse(PLATFORM_URLS[platform]).hostname
-        identity = _account_identity(session['context'], page, platform, session) if host_matches and not login else {}
-        authorized = bool(host_matches and recognised and not login and identity.get('identity_verified'))
-        return {**identity, 'status':'authorized' if authorized else 'login_required',
-            'login_required':not authorized, 'publish_ready':authorized}
+        return _browser_auth_status(session['context'], platform, session)
     except Exception:
-        return {'status':'login_required', 'login_required':True, 'publish_ready':False}
+        from app.connectors.web_auth import pending
+        return pending()
 
 
 @browser_operation
@@ -1408,7 +1361,7 @@ def read_work_metrics(company_id, platform, targets, expected_account_id=None):
     if not session:
         return {'status':'login_required','items':{},'message':'请先在发布平台打开对应账号的网页登录'}
     page = session['context'].new_page()
-    probe = {**session, 'page':page}
+    probe = {**session, 'page':page, 'auth_directory': _profile_dir(company_id, platform)}
     records, observed_ids = [], set()
     complete = False
     seen_response = False
@@ -1540,8 +1493,9 @@ def read_work_metrics(company_id, platform, targets, expected_account_id=None):
                 if disabled:
                     complete = True; break
                 button.click(timeout=10000); page.wait_for_timeout(1500)
-        if '/login' in urlparse(page.url).path or any(label in _page_text(page) for label in ('扫码登录', '验证码登录')):
-            return {'status':'login_required','items':{},'message':'平台会话已过期，请重新登录对应账号'}
+        api_state = _metrics_page_status(platform, probe)
+        if api_state.get('login_required', True):
+            return {**api_state, 'items':{}}
         items = match_records(targets, records, complete)
         count = len(observed_ids)
         if len(items) == len(targets):

@@ -39,6 +39,10 @@ class TaskCreate(BaseModel):
     input_params: dict | None = None
 
 
+class ScheduledTaskUpdate(TaskCreate):
+    schedule: TaskSchedule
+
+
 class TaskResponse(BaseModel):
     id: uuid.UUID
     company_id: uuid.UUID

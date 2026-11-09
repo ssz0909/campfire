@@ -57,7 +57,8 @@ def save_raw_clip(db, project, task, content, storage):
         asset_metadata={'production_mode': 'raw_model_clip', 'clip_library': {
             'version': 1, 'source_project_id': str(project.id), 'provider_task_id': str(task.id),
             'contract': shot_contract(project, shot),
-            'prompt': (task.input_params or {}).get('prompt'),
+            'prompt': project.script if project.creation_mode == 'library_clip' else (task.input_params or {}).get('prompt'),
+            'manual_variant': project.creation_mode == 'library_clip',
             'review_status': 'pending', 'usage_count': 0,
             'music_applied': False, 'branding_applied': False,
         }})

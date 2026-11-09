@@ -1,4 +1,5 @@
 import copy
+import uuid
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -223,3 +224,156 @@ def test_incoming_fade_prevents_reuse(db,library):
     project.storyboard=[{**s,**({'transition_out':'fade'} if i==0 else {})}
                         for i,s in enumerate(project.storyboard)]
     assert not compatible(project,project.storyboard[1],clips[1])
+
+
+def test_asset_list_hides_task_final_and_raw_clips_from_top_level(db,library):
+    from app.services.asset_service import AssetService
+    from app.models.asset import Asset
+    from app.models.video_project import VideoProject
+    from app.models.task import OperationTask
+    user,company,project,images,clips,storage=library
+    task=OperationTask(company_id=company.id,created_by=user.id,title='来源任务',task_type='video_generation',status='completed')
+    db.add(task);db.flush();project.task_id=task.id
+    final=Asset(company_id=company.id,uploaded_by=user.id,name='最终成片',original_filename='final.mp4',
+        file_key='final.mp4',asset_type='video',mime_type='video/mp4',file_size_bytes=1,processing_status='ready')
+    db.add(final);db.flush();project.output_asset_id=final.id;db.commit()
+    items,total=AssetService(db,storage).list_assets(company.id,asset_type='video')
+    assert final not in items
+    assert total==0 and items==[]
+
+
+def test_library_clip_regeneration_creates_isolated_billable_project(db,library,monkeypatch):
+    from app.services.asset_clip_regeneration import create,related,MODE
+    from app.models.video_project import VideoProject
+    user,company,project,images,clips,storage=library
+    monkeypatch.setattr('app.services.video_generation.provider',lambda:Mock())
+    monkeypatch.setattr('app.services.video_generation.reference_url',lambda *args,**kwargs:'https://example.test/reference')
+    queued=Mock();monkeypatch.setattr('app.services.video_generation.enqueue',queued)
+    request_id=uuid.uuid4()
+    variant=create(db,images[0],user.id,'镜头先展现泳池整体，再缓慢侧移展示瀑布水流',request_id,'9:16')
+    assert variant.creation_mode==MODE and variant.task_id is None
+    assert variant.music_disabled is True and variant.review_status=='pending_review'
+    assert variant.script=='镜头先展现泳池整体，再缓慢侧移展示瀑布水流'
+    assert variant.reference_asset_id==images[0].id and variant.storyboard[0]['source_asset_id']==str(images[0].id)
+    queued.assert_called_once_with(variant.id)
+    same=create(db,images[0],user.id,variant.script,request_id,'9:16')
+    assert same.id==variant.id and queued.call_count==1
+    with pytest.raises(HTTPException):
+        create(db,images[0],user.id,'不允许并发重复生成',uuid.uuid4(),'9:16')
+    source,related_clips,total,jobs=related(db,images[0])
+    assert source.id==images[0].id and total==1 and len(related_clips)==1
+    assert any(job['id']==str(variant.id) for job in jobs)
+
+
+def test_task_final_and_raw_clips_are_hidden_from_top_level_asset_list(db,library):
+    from app.services.asset_service import AssetService
+    from app.models.task import OperationTask
+    user,company,project,images,clips,storage=library
+    task=OperationTask(company_id=company.id,created_by=user.id,title='视频任务',task_type='video_generation',status='completed')
+    db.add(task);db.flush();project.task_id=task.id
+    final=Asset(company_id=company.id,uploaded_by=user.id,name='最终成片',original_filename='final.mp4',
+        file_key='final.mp4',asset_type='video',mime_type='video/mp4',file_size_bytes=1,processing_status='ready')
+    db.add(final);db.flush();project.output_asset_id=final.id;db.commit()
+    items,total=AssetService(db,storage).list_assets(company.id,asset_type='video')
+    assert total==0 and items==[]
+
+
+def test_hand_regenerated_variant_requires_explicit_approval(db,library,monkeypatch):
+    from fastapi import HTTPException
+    from app.services.asset_clip_regeneration import create,approve as approve_variant
+    user,company,project,images,clips,storage=library
+    monkeypatch.setattr('app.services.video_generation.provider',lambda:Mock())
+    monkeypatch.setattr('app.services.video_generation.reference_url',lambda *args,**kwargs:'https://example.test/reference')
+    monkeypatch.setattr('app.services.video_generation.enqueue',lambda *args:None)
+    variant=create(db,clips[0],user.id,'人物自然入镜并向泳池边走去',uuid.uuid4())
+    with pytest.raises(HTTPException) as error:
+        approve_variant(db,clips[0])
+    assert error.value.status_code==409
+    from app.models.video_project import ProviderTask
+    generated=Asset(company_id=company.id,uploaded_by=user.id,name='手动分镜',original_filename='variant.mp4',
+        file_key='variant.mp4',asset_type='video',mime_type='video/mp4',file_size_bytes=1,
+        processing_status='ready',duration_seconds=5,asset_metadata={'production_mode':'raw_model_clip','clip_library':{
+            'source_project_id':str(variant.id),'provider_task_id':str(uuid.uuid4()),
+            'contract':{'source_asset_id':str(images[0].id),'aspect_ratio':variant.aspect_ratio,
+                'generation_mode':variant.generation_mode,'framing':'wide','focal_x':0.5,'focal_y':0.5,
+                'camera_movement':'自然运镜','transition_in':'cut','transition_out':'cut','video_style':'',
+                'visual_description':'泳池','generation_prompt':'人工提示','retained_duration':3,
+                'subshots':[]},'review_status':'pending','usage_count':0,'music_applied':False,'branding_applied':False}})
+    db.add(generated);db.flush()
+    provider_task=ProviderTask(company_id=company.id,video_project_id=variant.id,provider_name='relay',
+        task_type='video_generation',shot_number=1,status='completed',raw_asset_id=generated.id)
+    db.add(provider_task);db.flush()
+    generated.asset_metadata['clip_library']['provider_task_id']=str(provider_task.id)
+    variant.storyboard=[{**variant.storyboard[0],'output_asset_id':str(generated.id)}]
+    variant.output_asset_id=generated.id;variant.project_status='pending_review';db.commit()
+    approve_variant(db,generated)
+    assert generated.asset_metadata['clip_library']['review_status']=='approved'
+
+
+def test_regeneration_api_returns_durable_project_and_related_preview(client,db,library,monkeypatch):
+    from tests.conftest import auth_headers
+    user,company,project,images,clips,storage=library
+    monkeypatch.setattr('app.services.video_generation.provider',lambda:Mock())
+    monkeypatch.setattr('app.services.video_generation.reference_url',lambda *args,**kwargs:'https://example.test/reference')
+    enqueue=Mock();monkeypatch.setattr('app.services.video_generation.enqueue',enqueue)
+    path=f'/api/v1/companies/{company.id}/assets/{images[0].id}'
+    response=client.post(path+'/regenerate-clip',headers=auth_headers(user),json={
+        'prompt':'人物缓慢走向泳池','request_id':str(uuid.uuid4()),'aspect_ratio':'9:16'})
+    assert response.status_code==202,response.text
+    assert response.json()['status']=='analyzing'
+    enqueue.assert_called_once()
+    response=client.get(path+'/clips',headers=auth_headers(user))
+    assert response.status_code==200,response.text
+    assert response.json()['source']['id']==str(images[0].id)
+    assert response.json()['total']==1 and len(response.json()['items'])==1
+    assert response.json()['jobs'][0]['status']=='analyzing'
+
+
+def test_manual_clip_generation_preserves_original_film(db,library,monkeypatch):
+    from app.services.asset_clip_regeneration import create,generate,approve as approve_variant
+    user,company,original,images,clips,storage=library
+    before=copy.deepcopy(original.storyboard)
+    original_output=original.output_asset_id
+    original_status=original.project_status
+    monkeypatch.setattr('app.services.video_generation.provider',lambda:Mock())
+    monkeypatch.setattr('app.services.video_generation.reference_url',lambda *a,**kw:'https://example.test/reference')
+    monkeypatch.setattr('app.services.video_generation.enqueue',lambda *a:None)
+    variant=create(db,clips[0],user.id,'镜头缓慢靠近水面，保持真实建筑结构',uuid.uuid4())
+    def fake_generate(db,project,provider,request,shot_number):
+        assert project.id==variant.id and shot_number==1
+        assert request.duration_seconds==5 and request.audio is False
+        assert '镜头缓慢靠近水面' in request.prompt
+        assert request.reference_image_url=='https://example.test/reference'
+        task=ProviderTask(company_id=company.id,video_project_id=variant.id,provider_name='mock',
+            task_type='video_generation',shot_number=1,status='completed',input_params={'prompt':request.prompt})
+        db.add(task);db.flush()
+        save_raw_clip(db,project,task,b'new-clip',storage)
+        return b'new-clip',task
+    monkeypatch.setattr('app.services.video_generation._generate_clip',fake_generate)
+    generate(db,variant)
+    assert variant.project_status=='pending_review' and variant.task_id is None
+    new=db.get(Asset,variant.output_asset_id)
+    assert new.asset_metadata['clip_library']['manual_variant'] is True
+    assert new.asset_metadata['clip_library']['review_status']=='pending'
+    assert new not in approved_candidates(db,variant)
+    approve_variant(db,new)
+    assert new in approved_candidates(db,variant)
+    db.refresh(original)
+    assert original.storyboard==before and original.output_asset_id==original_output
+    assert original.project_status==original_status
+
+
+def test_delete_clip_blocks_incomplete_project_and_preserves_completed_film(db,library):
+    from app.services.asset_service import AssetService
+    user,company,project,images,clips,storage=library
+    project.project_status='generating_shots'
+    db.commit()
+    with pytest.raises(HTTPException) as error:
+        AssetService(db,storage).delete_asset(company.id,clips[0].id)
+    assert error.value.status_code==409 and not clips[0].is_deleted
+    project.project_status='completed'
+    db.commit()
+    original=copy.deepcopy(project.storyboard)
+    AssetService(db,storage).delete_asset(company.id,clips[0].id)
+    assert clips[0].is_deleted and not clips[0].is_available
+    assert not images[0].is_deleted and project.storyboard==original

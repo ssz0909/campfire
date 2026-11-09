@@ -13,6 +13,7 @@ from app.database import SessionLocal
 from app.models.video_project import VideoProject, ProviderTask
 from app.models.asset import Asset
 from app.services.storage_service import StorageService
+from app.services.video_music import model_audio_enabled
 
 worker = ThreadPoolExecutor(max_workers=2, thread_name_prefix='video-generation')
 logger = logging.getLogger(__name__)
@@ -127,7 +128,7 @@ def _compose_selected_images(db, project, selected_ids):
             request = VideoGenerationRequest(prompt=prompt, duration_seconds=5 if planned or cost else clip_duration,
                 aspect_ratio=project.aspect_ratio, style=project.video_style,
                 reference_image_url=reference_url(db, project, asset_id, shot=shot) if planned or cost else reference_url(db, project, asset_id),
-                resolution=settings.VIDEO_RESOLUTION, audio=False if project.music_asset_id else settings.VIDEO_AUDIO)
+                resolution=settings.VIDEO_RESOLUTION, audio=model_audio_enabled(project))
             if client is None:
                 client = provider()
             clip, task = _generate_clip(db, project, client, request, shot_number=number)
@@ -304,6 +305,10 @@ def run(project_id):
             project.project_status = 'completed' if project.review_status == 'approved' else 'pending_review'
             db.commit()
             return
+        if project.creation_mode == 'library_clip':
+            from app.services.asset_clip_regeneration import generate
+            generate(db, project)
+            return
         selected_ids=[uuid.UUID(str(value)) for value in (project.selected_asset_ids or [])]
         if selected_ids and project.storyboard and (getattr(project, 'generation_mode', 'quality') == 'cost' or project.storyboard[0].get('planning_version') == 2):
             _compose_selected_images(db, project, selected_ids)
@@ -331,7 +336,7 @@ def run(project_id):
                    '如提供首帧参考图，保持其真实主体与场景，添加自然镜头运动及可见主体的合理动态，不虚构素材之外的人物或设施；未提供参考图时按用户脚本和主题生成。')
         request = VideoGenerationRequest(prompt=prompt,duration_seconds=project.target_duration_seconds or 5,
             aspect_ratio=project.aspect_ratio,style=project.video_style,
-            reference_image_url=reference_url(db, project), resolution=settings.VIDEO_RESOLUTION, audio=False if project.music_asset_id else settings.VIDEO_AUDIO)
+            reference_image_url=reference_url(db, project), resolution=settings.VIDEO_RESOLUTION, audio=model_audio_enabled(project))
         content, task = _generate_clip(db, project, client, request)
         from app.services.media_processing import assemble_model_clips
         content = assemble_model_clips([content], project.aspect_ratio, project.target_duration_seconds or 5)

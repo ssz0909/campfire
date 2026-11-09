@@ -4,16 +4,27 @@ import uuid
 from typing import Literal
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class MusicSettings(BaseModel):
+    music_disabled: bool = False
     music_asset_id: uuid.UUID | None = None
     music_volume: float = Field(default=0.25, ge=0, le=1, allow_inf_nan=False)
 
 
 class DefaultMusicSettings(MusicSettings):
-    selection_mode: Literal['fixed','random'] = 'fixed'
+    selection_mode: Literal['fixed','random','none'] = 'fixed'
+
+
+class TaskMusicSettings(MusicSettings):
+    selection_mode: Literal['workspace', 'fixed', 'random', 'none', 'model'] = 'workspace'
+
+    @model_validator(mode='after')
+    def fixed_requires_asset(self):
+        if self.selection_mode == 'fixed' and not self.music_asset_id:
+            raise ValueError('固定配乐需要选择音频素材')
+        return self
 
 
 class VideoProjectCreate(MusicSettings):
@@ -41,6 +52,7 @@ class VideoProjectCreate(MusicSettings):
 
 
 class VideoProjectUpdate(BaseModel):
+    music_disabled: bool = False
     generation_mode: Literal['quality', 'cost'] | None = None
     reuse_policy: Literal['fresh', 'prefer_reuse', 'reuse_only'] | None = None
     music_asset_id: uuid.UUID | None = None
@@ -71,6 +83,7 @@ class ShotRegenerateRequest(BaseModel):
 
 
 class VideoProjectResponse(BaseModel):
+    music_disabled: bool = False
     industry_override: str | None = None
     industry_template_snapshot: dict | None = None
     generation_mode: Literal['quality', 'cost'] = 'quality'

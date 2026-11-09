@@ -3,8 +3,25 @@ from __future__ import annotations
 import threading
 from types import SimpleNamespace
 from pathlib import Path
+import httpx
+import pytest
 
-from app.connectors import web_platform
+from app.connectors import web_platform, web_auth
+
+
+@pytest.fixture(autouse=True)
+def provider_identity_api(monkeypatch):
+    client = httpx.Client
+    def handler(request):
+        if not request.headers.get('cookie'):
+            return httpx.Response(401)
+        return httpx.Response(200, json=({'status_code': 0, 'user': {'uid': '123'}}
+            if request.url.host == 'creator.douyin.com' else {
+                'errCode': 0, 'data': {'finderUser': {'finderUsername': 'official-account'}}}))
+    monkeypatch.setattr(web_auth.httpx, 'Client', lambda **kwargs: client(transport=httpx.MockTransport(handler), **kwargs))
+    monkeypatch.setattr(web_auth, 'template_for', lambda directory, platform, session=None: (
+        web_auth.api._default_douyin({})['templates']['identity'] if platform == 'douyin' else {
+            'url': 'https://channels.weixin.qq.com/cgi-bin/mmfinderassistant-bin/auth/auth_data', 'method': 'POST', 'body': {}}))
 
 
 def test_editor_wait_reports_only_recognized_platform_notices(monkeypatch):
@@ -111,7 +128,8 @@ class _Context:
         raise AssertionError("existing page should be reused")
 
     def cookies(self):
-        return [{'name': 'secret-cookie', 'value': 'secret-value'}]
+        return [{'name': 'secret-cookie', 'value': 'secret-value',
+                 'domain': web_platform.urlparse(self.pages[0].url).hostname}]
 
 
 class _Playwright:
@@ -137,8 +155,10 @@ def test_login_window_reuses_existing_session_and_checks_authorization(monkeypat
 
 def test_login_page_remains_unauthorized_until_qr_is_completed(monkeypatch):
     page = _Page(body="扫码登录", url="https://creator.douyin.com/")
+    context = _Context(page)
+    context.cookies = lambda: []
     monkeypatch.setitem(web_platform._profiles, "test-company:douyin", {
-        "pw": _Playwright(), "context": _Context(page), "page": page,
+        "pw": _Playwright(), "context": context, "page": page,
     })
 
     status = web_platform.session_status("test-company", "douyin")
@@ -164,7 +184,7 @@ def test_loading_page_keeps_session_pending(monkeypatch):
     monkeypatch.setitem(web_platform._profiles, "test-company:douyin", {"page": page})
     result = web_platform.session_status("test-company", "douyin")
     assert result["status"] == "login_required"
-    assert "仍在加载" in result["message"]
+    assert "无需退出账号" in result["message"]
 
 
 def test_status_persists_authorized_and_clears_disconnected(db, monkeypatch):
@@ -253,14 +273,18 @@ def test_closed_window_preserves_encrypted_session_and_logout_clears_only_one_pl
     assert other.exists()
 
 
-def test_expired_login_invalidates_saved_session(tmp_path, monkeypatch):
+def test_expired_api_blocks_without_deleting_saved_session(tmp_path, monkeypatch):
     monkeypatch.setattr(web_platform.settings, 'LOCAL_STORAGE_PATH', str(tmp_path))
     monkeypatch.setattr(web_platform, '_profiles', {})
     path = web_platform._saved_path('company', 'douyin')
     path.write_text('old-session')
-    web_platform._profiles['company:douyin'] = {'page': _Page(body='扫码登录')}
-    assert web_platform.session_status('company', 'douyin')['login_required'] is True
-    assert not path.exists()
+    page = _Page(body='页面文字已改版')
+    context = _Context(page)
+    context.cookies = lambda: []
+    web_platform._profiles['company:douyin'] = {'page': page, 'context': context}
+    state = web_platform.session_status('company', 'douyin')
+    assert state['login_required'] and state['auth_state'] == 'expired'
+    assert path.read_text() == 'old-session'
 
 
 def test_saved_session_reopens_and_expired_login_prevents_publish(tmp_path, monkeypatch):
@@ -274,7 +298,7 @@ def test_saved_session_reopens_and_expired_login_prevents_publish(tmp_path, monk
         web_platform._profiles[f'{company}:{platform}'] = {'page': _Page(body='扫码登录')}
     monkeypatch.setattr(web_platform, 'start_session', reopen)
     result = web_platform.publish('company', 'douyin', 'title', '', '/unused.mp4')
-    assert opened == ['douyin']
+    assert opened == []  # Expired API credentials cannot trigger a browser launch.
     assert result['login_required'] is True
     assert result['status'] == 'login_required'
 
@@ -324,7 +348,7 @@ def test_save_failure_is_reported_without_claiming_session_saved(tmp_path, monke
     monkeypatch.setattr(web_platform, '_profiles', {})
     page = _Page()
     context = _Context(page)
-    context.cookies = lambda: (_ for _ in ()).throw(RuntimeError('cookies unavailable'))
+    monkeypatch.setattr(web_platform, '_save_session', lambda *args: False)
     web_platform._profiles['company:douyin'] = {'page': page, 'context': context}
     result = web_platform.session_status('company', 'douyin')
     assert result['status'] == 'authorized'
@@ -339,12 +363,13 @@ def test_polling_saves_without_storage_state_navigation_and_throttles(tmp_path, 
     context = _Context(page)
     context.storage_state = lambda: (_ for _ in ()).throw(AssertionError('must not open origin pages'))
     calls = []
-    context.cookies = lambda: calls.append(True) or []
+    original = context.cookies
+    context.cookies = lambda: calls.append(True) or original()
     web_platform._profiles['company:douyin'] = {'page': page, 'context': context}
     for _ in range(3):
         assert web_platform.session_status('company', 'douyin')['session_saved']
-    # One session save plus one account-fingerprint read per status check.
-    assert len(calls) == 4
+    # API proof and the encrypted HTTP capture share the same account jar.
+    assert len(calls) <= 7
     assert len(context.pages) == 1
 
 
@@ -368,6 +393,43 @@ def test_channels_anonymous_dashboard_is_not_authorized(tmp_path, monkeypatch):
     monkeypatch.setattr(web_platform.settings, 'LOCAL_STORAGE_PATH', str(tmp_path))
     page = _Page(body='作品管理 数据中心', url='https://channels.weixin.qq.com/platform')
     page.evaluate = lambda script: {'finder_uin': '', 'finder_username': '', 'finder_raw': '', '__ml::aid': 'telemetry'}
-    monkeypatch.setattr(web_platform, '_profiles', {'company:wechat_channels': {'page': page, 'context': _Context(page)}})
+    context = _Context(page)
+    context.cookies = lambda: []
+    monkeypatch.setattr(web_platform, '_profiles', {'company:wechat_channels': {'page': page, 'context': context}})
     assert web_platform.session_status('company', 'wechat_channels')['status'] == 'login_required'
-    assert not web_platform._saved_state_has_auth({'cookies': [{'name':'tracking'}], 'origins': []}, 'wechat_channels')
+
+
+def test_channels_video_management_saves_verified_session(tmp_path, monkeypatch):
+    monkeypatch.setattr(web_platform.settings, 'LOCAL_STORAGE_PATH', str(tmp_path))
+    page = _Page(body='视频管理 视频 (21) 发表视频', url='https://channels.weixin.qq.com/platform/post/list')
+    def evaluate(script):
+        if 'Object.fromEntries' in script:
+            return {'finder_username': 'official-account'}
+        if 'getItem' in script:
+            return 'official-account'
+        return {'origin': 'https://channels.weixin.qq.com', 'localStorage': [
+            {'name': 'finder_username', 'value': 'official-account'}]}
+    page.evaluate = evaluate
+    session = {'page': page, 'context': _Context(page)}
+    monkeypatch.setattr(web_platform, '_profiles', {'company:wechat_channels': session})
+    state = web_platform.session_status('company', 'wechat_channels')
+    assert state['publish_ready'] and state['session_saved'] and state['identity_verified']
+    assert web_platform._metrics_page_status('wechat_channels', session)['publish_ready']
+    page.is_closed = lambda: True
+    saved = web_platform.session_status('company', 'wechat_channels')
+    assert saved['status'] == 'session_saved' and saved['publish_ready']
+
+
+def test_channels_video_management_shell_cannot_authorize_anonymous_or_login_page(tmp_path, monkeypatch):
+    monkeypatch.setattr(web_platform.settings, 'LOCAL_STORAGE_PATH', str(tmp_path))
+    page = _Page(body='视频管理 发表视频', url='https://channels.weixin.qq.com/platform/post/list')
+    page.evaluate = lambda script: {}
+    context = _Context(page)
+    context.cookies = lambda: []
+    monkeypatch.setattr(web_platform, '_profiles', {
+        'company:wechat_channels': {'page': page, 'context': context}})
+    state = web_platform.session_status('company', 'wechat_channels')
+    assert state['login_required'] and not state['publish_ready']
+    page.body += ' 扫码登录'
+    state = web_platform.session_status('company', 'wechat_channels')
+    assert state['login_required'] and not state['publish_ready']

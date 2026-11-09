@@ -10,7 +10,7 @@ from app.core.permissions import Permission, require_permission
 from app.dependencies import get_current_active_user, get_db
 from app.models.user import User
 from app.models.task import OperationTask
-from app.schemas.task import TaskCreate, TaskCostResponse, TaskResponse
+from app.schemas.task import TaskCreate, TaskCostResponse, TaskResponse, ScheduledTaskUpdate
 from app.services.task_service import TaskService
 from app.utils.pagination import PaginatedResponse
 
@@ -23,6 +23,20 @@ class ContinueExecution(BaseModel):
 
 class ScheduleState(BaseModel):
     enabled: bool
+
+
+@router.put('/{company_id}/tasks/{tid}/schedule-template', response_model=TaskResponse)
+def update_schedule_template(company_id: uuid.UUID, tid: uuid.UUID, data: ScheduledTaskUpdate,
+    current_user: User = Depends(require_permission(Permission.TASK_EXECUTE)), db: Session = Depends(get_db)):
+    return TaskService(db).update_schedule(company_id, tid, current_user.id, data)
+
+
+@router.post('/{company_id}/tasks/{tid}/run-now', response_model=TaskResponse, status_code=201)
+def run_schedule_now(company_id: uuid.UUID, tid: uuid.UUID,
+    current_user: User = Depends(require_permission(Permission.TASK_EXECUTE)), db: Session = Depends(get_db)):
+    task = TaskService(db).run_schedule_now(company_id, tid, current_user.id)
+    dispatch_task(db, task, current_user)
+    return task
 
 
 @router.put('/{company_id}/tasks/{tid}/auto-execute', response_model=TaskResponse)

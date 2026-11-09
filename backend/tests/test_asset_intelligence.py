@@ -64,6 +64,38 @@ def test_topic_selection_prefers_recognized_images_and_is_tenant_scoped(db):
     assert stale.id not in [item.id for item in selected]
 
 
+def test_selection_rotates_actual_recent_sources_and_preserves_scenes(db):
+    user=create_test_user(db);company=create_test_company(db,user)
+    rooms=[make_asset(db,company,user,f'客房{i}','guest_room',['客房'],'窗景') for i in range(5)]
+    pools=[make_asset(db,company,user,f'泳池{i}','pool',['泳池'],'池水') for i in range(5)]
+    project=VideoProject(company_id=company.id,created_by=user.id,title='recent',creation_mode='reference_inspired_video',
+        project_status='completed',selected_asset_ids=[str(a.id) for a in rooms+pools],
+        storyboard=[{'source_asset_id':str(rooms[0].id)},{'source_asset_id':str(pools[0].id)}])
+    db.add(project);db.commit()
+    selected=select_assets_for_video(db,company.id,'客房泳池',limit=4,rotation_key='today')
+    assert len(selected)==4 and {a.category for a in selected}=={'guest_room','pool'}
+    assert not {rooms[0].id,pools[0].id} & {a.id for a in selected}
+    # Candidate pools were not actually used; they stay eligible.
+    assert {a.id for a in selected}<={a.id for a in rooms[1:]+pools[1:]}
+    assert [a.id for a in selected]==[a.id for a in select_assets_for_video(db,company.id,'客房泳池',limit=4,rotation_key='today')]
+    outcomes={tuple(a.id for a in select_assets_for_video(db,company.id,'客房泳池',limit=4,rotation_key=f'task-{i}')) for i in range(8)}
+    assert len(outcomes)>1
+
+
+def test_rotation_keeps_required_scarce_sources_and_ignores_other_tenants(db):
+    user=create_test_user(db);company=create_test_company(db,user)
+    other=create_test_company(db,user,slug='other-rotation')
+    room=make_asset(db,company,user,'唯一客房','guest_room',['客房'],'客房')
+    pool=make_asset(db,company,user,'泳池','pool',['泳池'],'泳池')
+    db.add(VideoProject(company_id=other.id,created_by=user.id,title='foreign',creation_mode='reference_inspired_video',
+        selected_asset_ids=[str(room.id)],project_status='completed'))
+    project=VideoProject(company_id=company.id,created_by=user.id,title='same task',task_id=None,
+        creation_mode='reference_inspired_video',selected_asset_ids=[str(room.id)],project_status='completed')
+    db.add(project);db.commit()
+    selected=select_assets_for_video(db,company.id,'客房泳池',limit=4,rotation_key='next')
+    assert {a.id for a in selected}=={room.id,pool.id}
+
+
 def test_video_project_rejects_foreign_or_unready_images(db):
     user=create_test_user(db)
     company=create_test_company(db,user)

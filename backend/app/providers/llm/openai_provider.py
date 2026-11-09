@@ -64,7 +64,16 @@ class OpenAIProvider(LLMProvider):
             except httpx.RequestError as exc:
                 raise ValueError('大模型服务连接异常，未取得交付结果；请检查中转服务后重新执行任务') from exc
             if response.is_error:
-                raise ValueError(f'大模型接口 HTTP {response.status_code}，请检查 LLM_BASE_URL、LLM_MODEL 和 LLM_API_KEY')
+                code = response.status_code
+                if code in (408, 504, 524):
+                    raise ValueError(f'大模型中转或上游响应超时（HTTP {code}），未取得本次交付结果；不代表模型 KEY 错误。请核对中转请求记录后再重新执行，避免重复计费。')
+                if code in (401, 403):
+                    raise ValueError(f'大模型鉴权或权限校验失败（HTTP {code}），请检查当前生效的模型 KEY、模型访问权限及中转配置')
+                if code == 429:
+                    raise ValueError('大模型接口限流或额度不足（HTTP 429），请核对中转额度与并发限制后重试')
+                if code >= 500:
+                    raise ValueError(f'大模型中转或上游服务异常（HTTP {code}），未取得本次交付结果；请检查中转服务状态')
+                raise ValueError(f'大模型接口 HTTP {code}，请检查请求参数、模型名称及中转接口地址')
             data = response.json()
 
         choice = data["choices"][0]

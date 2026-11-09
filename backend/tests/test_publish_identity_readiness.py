@@ -64,13 +64,13 @@ def test_missing_identity_timeout_does_not_claim_wrong_account(monkeypatch):
     assert '账号不一致' not in result['message']
 
 
-def test_explicit_login_screen_requests_login_instead_of_identity_mismatch(monkeypatch):
+def test_explicit_api_expiration_requests_login_instead_of_identity_mismatch(monkeypatch):
     page = Mock()
     monkeypatch.setattr(web, 'session_status', lambda *args: {
-        'status':'login_required', 'login_required':True})
-    monkeypatch.setattr(web, '_page_text', lambda *args: '扫码登录 · 验证码登录')
+        'status':'login_required', 'login_required':True, 'auth_state':'expired', 'message':'平台会话已过期'})
+    monkeypatch.setattr(web, '_page_text', lambda *args: (_ for _ in ()).throw(AssertionError('no DOM auth')))
     result = web._wait_for_account_ready('company', 'wechat_channels', {'page':page}, 'websha256:bound')
-    assert result['login_required'] and '登录已失效' in result['message']
+    assert result['login_required'] and '已过期' in result['message']
     assert not result.get('identity_mismatch') and not result.get('identity_unavailable')
     page.wait_for_timeout.assert_not_called()
 

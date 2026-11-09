@@ -150,16 +150,20 @@ def test_wrong_bound_identity_stops_before_upload(monkeypatch):
     assert result['status']=='login_required' and not result['metrics']
 
 
-def test_douyin_identity_uses_uid_not_rotating_cookies():
+def test_douyin_identity_uses_uid_not_rotating_cookies(monkeypatch):
     from types import SimpleNamespace
     from app.connectors import web_platform as web
-    cookies = [{'name':'uid_tt', 'value':'login-session-one'}]
+    from app.connectors import web_auth
+    import httpx
+    cookies = [{'name':'uid_tt', 'value':'login-session-one', 'domain':'.douyin.com'}]
     user = {'uid':'123456789', 'nickname':'龙兜兜'}
     calls = []
-    def get(url, **kwargs):
-        calls.append(url)
-        return SimpleNamespace(ok=True, json=lambda: {'status_code':0,'user':dict(user)})
-    context = SimpleNamespace(cookies=lambda: cookies, request=SimpleNamespace(get=get))
+    def handle(request):
+        calls.append(request.url)
+        return httpx.Response(200, json={'status_code':0,'user':dict(user)})
+    client=httpx.Client
+    monkeypatch.setattr(web_auth.httpx,'Client',lambda **kwargs:client(transport=httpx.MockTransport(handle),**kwargs))
+    context = SimpleNamespace(cookies=lambda: cookies)
     session = {}
     first = web._account_identity(context, None, 'douyin', session)
     session['account_identity'] = first
@@ -171,7 +175,7 @@ def test_douyin_identity_uses_uid_not_rotating_cookies():
     assert second['account_fingerprint'] == first['account_fingerprint']
     assert second['legacy_account_fingerprint'] != first['legacy_account_fingerprint']
     user['uid'] = '987654321'  # Even the same nickname cannot bypass UID binding.
-    session.pop('identity_checked_at', None)
+    session.pop('auth_probe', None)
     third = web._account_identity(context, None, 'douyin', session)
     assert third['account_fingerprint'] != first['account_fingerprint']
     assert not web._account_matches(third, first['account_fingerprint'])
@@ -210,20 +214,27 @@ def test_closed_verified_accounts_keep_separate_identity_and_publish_readiness(m
     from app.connectors import web_platform as web
     from app.core.secrets import encrypt_json
     from app.services.publishing_service import identity_options
+    from app.connectors import web_auth
+    import httpx
+    client=httpx.Client
+    def handle(request):
+        uid=request.headers['cookie'].split('=')[1]
+        return httpx.Response(200,json={'status_code':0,'user':{'uid':uid}})
+    monkeypatch.setattr(web_auth.httpx,'Client',lambda **kwargs:client(transport=httpx.MockTransport(handle),**kwargs))
     monkeypatch.setattr(web.settings,'LOCAL_STORAGE_PATH',str(tmp_path))
     monkeypatch.setattr(web,'_profiles',{})
     profiles=[str(uuid.uuid4()) for _ in range(3)]
     @web.browser_operation
-    def save(identity):
+    def save(uid):
         web._saved_path('company','douyin').write_text(encrypt_json({
-            'cookies':[{'name':'sessionid','value':'test-secret'}],
-            'account_identity':{'account_fingerprint':identity,'identity_verified':True}}))
+            'cookies':[{'name':'sessionid','value':uid,'domain':'.douyin.com'}],
+            'account_identity':{'account_fingerprint':'stale-id','identity_verified':True}}))
     for i,profile in enumerate(profiles):
-        save(f'webuidsha256:account-{i}',profile_id=profile)
+        save(str(123+i),profile_id=profile)
     for i,profile in enumerate(profiles):
         result=web.session_status('company','douyin',profile_id=profile)
         assert result['status']=='session_saved' and result['publish_ready']
         assert result['browser_open'] is False
-        assert result['account_fingerprint']==f'webuidsha256:account-{i}'
+        assert result['account_fingerprint']==web._identity_digest('douyin',str(123+i))
         assert 'test-secret' not in str(result)
     assert identity_options(Mock(account_id='webuidsha256:stable'))=={'expected_account_id':'webuidsha256:stable'}

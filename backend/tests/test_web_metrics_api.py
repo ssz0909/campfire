@@ -170,3 +170,93 @@ def test_capture_only_reads_and_saves_encrypted_verified_account(local):
     request.post_data_json = {'currentPage': 3, 'rawKeyBuff': 'other'}
     api.observe_request(response, 'wechat_channels', session)
     assert session['metrics_api_templates']['list']['body']['currentPage'] == 1
+
+
+def test_creator_list_metrics_window_and_more_flag(local, monkeypatch):
+    from datetime import datetime, timezone
+    value, identity = bundle('douyin')
+    value['templates']['list']['url'] = ('https://creator.douyin.com/web/api/creator/item/list?count=10'
+        '&fields=review&start_time=1&end_time=2&status_list%5B%5D=143&msToken=secret')
+    (api.profile_path(COMPANY, 'douyin') / 'metrics-api.enc').write_text(encrypt_json(value))
+    now = datetime(2026, 11, 4, 8, tzinfo=timezone.utc)
+    pages = []
+    def handler(request):
+        if request.url.path.endswith('/info/'):
+            return httpx.Response(200, json={'status_code': 0, 'user': {'uid': '123'}})
+        q = request.url.params
+        assert q['fields'] == 'visibility,metrics,review'
+        assert q['start_time'] == str(int((now.timestamp()-300)*1000))
+        assert q['end_time'] == str(int((now.timestamp()+86400)*1000))
+        assert 'msToken' not in q and q['status_list[]'] == '143'
+        pages.append(q['max_cursor'])
+        number = len(pages)
+        return httpx.Response(200, json={'status_code':0, 'total':1, 'has_more':number == 1,
+            'max_cursor':99, 'items':[{'id':str(number), 'description':'hotel',
+                'create_time':now.timestamp(), 'metrics':{'view_count':12}}]})
+    install(monkeypatch, handler)
+    result = api.read_work_metrics(COMPANY, 'douyin', [{'job_id':'j', 'title':'hotel',
+        'description':'', 'created_at':now.isoformat()}], identity)
+    assert pages == ['0','99'] and result['list_complete']
+    assert not result['items']  # Duplicate text and time must remain ambiguous.
+
+
+def test_known_id_ignores_stale_date_filter_and_stops_early(local, monkeypatch):
+    value, identity = bundle('douyin')
+    value['templates']['list']['url'] = 'https://creator.douyin.com/web/api/creator/item/list?start_time=1&end_time=2'
+    (api.profile_path(COMPANY, 'douyin') / 'metrics-api.enc').write_text(encrypt_json(value))
+    def handler(request):
+        if request.url.path.endswith('/info/'):
+            return httpx.Response(200,json={'status_code':0,'user':{'uid':'123'}})
+        assert 'start_time' not in request.url.params and 'end_time' not in request.url.params
+        return httpx.Response(200,json={'status_code':0,'has_more':True,'max_cursor':99,
+            'items':[{'id':'1','metrics':{'view_count':99}}]})
+    install(monkeypatch,handler)
+    result=api.read_work_metrics(COMPANY,'douyin',[{'job_id':'j','post_id':'1'}],identity)
+    assert result['items']['j']['views']==99 and not result['list_complete']
+
+
+@pytest.mark.parametrize('discovery_more,duplicate', [(False, False), (True, False), (False, True)])
+def test_mixed_known_ids_and_new_jobs_use_exhaustive_time_window(local, monkeypatch, discovery_more, duplicate):
+    from datetime import datetime, timezone
+    _, identity = bundle('douyin')  # Captured janus template, not creator/item/list.
+    now = datetime(2026, 11, 6, 1, 10, tzinfo=timezone.utc)
+    calls = []
+    def handler(request):
+        if request.url.path.endswith('/info/'):
+            return httpx.Response(200, json={'status_code': 0, 'user': {'uid': '123'}})
+        calls.append(request.url)
+        if request.url.path.rstrip('/') == '/web/api/creator/item/list':
+            assert request.url.params['start_time'] == str(int((now.timestamp()-300)*1000))
+            assert request.url.params['end_time'] == str(int((now.timestamp()+86400)*1000))
+            assert request.url.params['fields'] == 'visibility,metrics,review'
+            items = [{'id': 'new', 'description': 'new video', 'create_time': now.timestamp(),
+                      'metrics': {'view_count': 80}}]
+            if duplicate:
+                items.append({**items[0], 'id': 'duplicate'})
+            return httpx.Response(200, json={'status_code': 0, 'items': items,
+                'has_more': discovery_more, 'max_cursor': 99, 'total': 1496 if discovery_more else len(items)})
+        # Large account: the full historical list remains incomplete.
+        return httpx.Response(200, json={'status_code': 0, 'has_more': True, 'total': 1496,
+            'max_cursor': 123, 'items': [{'id': 'known', 'metrics': {'view_count': 12}}]})
+    install(monkeypatch, handler)
+    targets = [{'job_id': 'old', 'post_id': 'known', 'title': 'older video'}, {'job_id': 'new', 'post_id': None,
+               'title': 'new video', 'description': '', 'created_at': now.isoformat()}]
+    result = api.read_work_metrics(COMPANY, 'douyin', targets, identity)
+    assert result['items']['old']['views'] == 12
+    assert not result['list_complete']
+    if not discovery_more and not duplicate:
+        assert result['status'] == 'synced' and result['items']['new']['post_id'] == 'new'
+        assert len(calls) == 2  # No 20-page historical scan for a new job.
+    else:
+        assert result['status'] == 'partial' and 'new' not in result['items']
+    assert len(calls) <= 20
+
+
+def test_time_window_does_not_claim_another_local_jobs_known_id():
+    target = {'job_id': 'new', 'post_id': None, 'title': 'hotel', 'description': '',
+              'created_at': '2026-11-06T01:10:00+00:00'}
+    records = [{'post_id': 'claimed', 'description': 'hotel', 'created_at': 1793927400, 'views': 12}]
+    targets = [target, {'job_id': 'old', 'post_id': 'claimed'}]
+    result = api.collection_result(targets, records, {'claimed'}, False,
+                                   discovery_records=records, discovery_complete=True)
+    assert 'new' not in result['items'] and result['items']['old']['views'] == 12

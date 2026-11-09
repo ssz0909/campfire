@@ -81,6 +81,12 @@
       </AppCard>
     </template>
 
+    <n-modal v-model:show="showListPreview" preset="card" :title="listPreviewAsset?.name || '素材预览'" style="width:min(900px, calc(100vw - 32px))">
+      <img v-if="listPreviewAsset?.asset_type === 'image'" :src="listPreviewAsset.file_url" :alt="listPreviewAsset.name" class="asset-list-preview" />
+      <video v-else-if="listPreviewAsset" :src="listPreviewAsset.file_url" :poster="listPreviewAsset.thumbnail_url" controls autoplay class="asset-list-preview" />
+      <p v-if="listPreviewAsset?.source_description">{{ listPreviewAsset.source_description }}</p>
+    </n-modal>
+
     <div v-if="total > 0" class="pagination-row"><span>共 {{ total }} 条</span><n-pagination v-if="total > pageSize" v-model:page="page" :page-size="pageSize" :item-count="total" @update:page="loadAssets" /></div>
 
     <n-modal v-model:show="showEdit" preset="card" title="修正素材信息" style="width:min(560px, calc(100vw - 32px))">
@@ -138,11 +144,13 @@ const message=useMessage()
 const categoryOptions=[{label:'酒店外观',value:'exterior'},{label:'大堂前台',value:'lobby'},{label:'客房',value:'guest_room'},{label:'卫浴',value:'bathroom'},{label:'餐厅',value:'restaurant'},{label:'早餐',value:'breakfast'},{label:'配套设施',value:'amenities'},{label:'泳池',value:'pool'},{label:'会议空间',value:'meeting_room'},{label:'员工服务',value:'staff'},{label:'景观周边',value:'landscape'},{label:'其他',value:'other'}]
 
 const showDeleteDialog = ref(false)
+const showListPreview=ref(false),listPreviewAsset=ref<Asset|null>(null)
 const deleteLoading = ref(false)
 const assetToDelete = ref<Asset | null>(null)
 
 const listColumns = computed<DataTableColumns<Asset>>(() => [
   { title: t('Name'), key: 'name', ellipsis: true },
+  { title: '预览', key: 'preview', render: (row) => h(NButton, { size: 'small', quaternary: true, 'aria-label': `预览${row.name}`, onClick: () => openListPreview(row) }, { default: () => '预览' }) },
   {
     title: t('Type'),
     key: 'asset_type',
@@ -171,6 +179,7 @@ function changeType() {
   changeFilter()
 }
 function changeFilter() { page.value = 1; loadAssets() }
+function openListPreview(asset:Asset){listPreviewAsset.value=asset;showListPreview.value=true}
 onMounted(() => { loadAssets(); visionTimer=setInterval(()=>{if(assets.value.some(a=>['pending','running'].includes(a.metadata?.vision_analysis?.status||'')))loadAssets()},3000) })
 onUnmounted(()=>{if(visionTimer)clearInterval(visionTimer)})
 
@@ -255,6 +264,7 @@ function formatBytes(bytes: number) {
 .asset-filters > :nth-child(2) { width:220px; }
 .vision-hint { color:var(--text-secondary); font-size:13px; margin-top:12px; }
 .pagination-row { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-top:16px; color:var(--text-secondary); }
+.asset-list-preview { display:block;max-width:100%;max-height:72vh;margin:0 auto;object-fit:contain; }
 
 .assets-grid {
   display: grid;

@@ -11,7 +11,7 @@ from app.models.asset import Asset
 from app.schemas.video_project import MusicSettings,VideoProjectCreate,VideoProjectUpdate
 from app.services.video_service import VideoService
 from app.services.video_music import music_asset
-from tests.conftest import create_test_user,create_test_company
+from tests.conftest import create_test_user,create_test_company,auth_headers
 
 
 def audio_asset(db,company,user):
@@ -19,6 +19,78 @@ def audio_asset(db,company,user):
         file_key=f'{uuid.uuid4()}.wav',asset_type='audio',mime_type='audio/wav',file_size_bytes=100,
         processing_status='ready',is_available=True)
     db.add(a);db.flush();return a
+
+
+def test_task_music_overrides_workspace_and_reaches_agent_project(db, monkeypatch):
+    from app.schemas.video_project import DefaultMusicSettings
+    from app.services.video_music import set_default_music, resolve_music_settings, task_music_config
+    from app.services.task_handoff import create_video_handoff
+    from app.models.task import OperationTask
+    from tests.test_asset_intelligence import make_asset
+    user=create_test_user(db);company=create_test_company(db,user)
+    music=audio_asset(db,company,user)
+    set_default_music(db,company.id,DefaultMusicSettings(selection_mode='fixed',music_asset_id=music.id))
+    assert resolve_music_settings(db,company.id,{'video_music':{'selection_mode':'none'}})['music_disabled']
+    assert resolve_music_settings(db,company.id,{'video_music':{'selection_mode':'workspace'}})['music_asset_id']==music.id
+    set_default_music(db,company.id,DefaultMusicSettings(selection_mode='none'))
+    original=resolve_music_settings(db,company.id,{'video_music':{'selection_mode':'model'}})
+    assert original['music_asset_id'] is None and original['music_disabled'] is False
+    assert resolve_music_settings(db,company.id,{'video_music':{'selection_mode':'fixed','music_asset_id':str(music.id)}})['music_asset_id']==music.id
+    choose=Mock(return_value=(music.id,))
+    monkeypatch.setattr('app.services.video_music.random.choice',choose)
+    config=task_music_config(db,company.id,{'selection_mode':'random','music_volume':0.45})
+    choose.assert_not_called()  # Selection happens at video creation, not task creation.
+    for i in range(12):make_asset(db,company,user,f'风景{i}','landscape',[],'山景')
+    task=OperationTask(company_id=company.id,created_by=user.id,title='任务随机配乐',task_type='video_generation',
+        status='completed',output={},input_params={'video_music':config})
+    db.add(task);db.commit()
+    project=create_video_handoff(db,task);db.commit()
+    assert project.music_asset_id==music.id and float(project.music_volume)==pytest.approx(0.45)
+    assert create_video_handoff(db,task).id==project.id
+    choose.assert_called_once()
+    assert company.business_goals['default_video_music']['selection_mode']=='none'
+
+
+def test_task_music_validation_is_tenant_scoped(db):
+    from app.services.video_music import task_music_config
+    user=create_test_user(db);company=create_test_company(db,user)
+    other=create_test_company(db,user,slug='task-music-other');music=audio_asset(db,other,user)
+    for config in ({'selection_mode':'fixed'}, {'selection_mode':'invalid'},
+                   {'selection_mode':'fixed','music_asset_id':str(music.id)},
+                   {'selection_mode':'random','music_volume':1.1}, None):
+        with pytest.raises(HTTPException) as error:task_music_config(db,company.id,config)
+        assert error.value.status_code==422
+
+
+def test_task_music_api_validates_and_saves_without_changing_workspace(client,db,monkeypatch):
+    user=create_test_user(db);company=create_test_company(db,user)
+    dispatch=Mock();monkeypatch.setattr('app.api.v1.tasks.dispatch_task',dispatch)
+    path=f'/api/v1/companies/{company.id}/tasks'
+    payload={'title':'任务配乐','task_type':'video_generation',
+             'input_params':{'goal':'制作15秒视频','video_music':{'selection_mode':'none'}}}
+    response=client.post(path,headers=auth_headers(user),json=payload)
+    assert response.status_code==201,response.text
+    assert response.json()['input_params']['video_music']['music_disabled'] is True
+    dispatch.assert_called_once()
+    invalid={**payload,'input_params':{'video_music':{'selection_mode':'fixed'}}}
+    assert client.post(path,headers=auth_headers(user),json=invalid).status_code==422
+    assert dispatch.call_count==1
+    db.refresh(company)
+    assert 'default_video_music' not in (company.business_goals or {})
+
+
+@pytest.mark.parametrize('loop',[True,False])
+def test_task_music_inherits_through_subtasks(db,loop):
+    from app.models.task import OperationTask
+    from app.services.execution_loop import child_params
+    user=create_test_user(db);company=create_test_company(db,user)
+    choice={'selection_mode':'random','music_volume':0.35}
+    root=OperationTask(company_id=company.id,created_by=user.id,title='运营任务',
+        task_type='business_analysis',input_params={'execution_loop':loop,'video_music':choice})
+    children=child_params(root)
+    assert children['video_music']==choice
+    children['video_music']['selection_mode']='none'
+    assert root.input_params['video_music']==choice
 
 
 def test_music_is_tenant_scoped_and_requires_ready_audio(db):
@@ -182,3 +254,66 @@ def test_random_music_uses_only_available_tenant_audio_and_persists_choice(db,mo
     first.is_available=False;second.is_available=False;db.commit()
     with pytest.raises(HTTPException,match='') as exc:resolve_music_settings(db,company.id)
     assert '暂无可用音频' in exc.value.detail
+
+
+def test_none_music_is_persisted_for_new_agent_and_manual_projects(db, monkeypatch):
+    from app.schemas.video_project import DefaultMusicSettings
+    from app.services.video_music import set_default_music, resolve_music_settings, model_audio_enabled, apply_music
+    from app.services.task_handoff import create_video_handoff
+    from app.models.task import OperationTask
+    from app.config import settings
+    from tests.test_asset_intelligence import make_asset
+    user=create_test_user(db); company=create_test_company(db,user)
+    music=audio_asset(db,company,user)
+    for i in range(12):make_asset(db,company,user,f'风景{i}','landscape',[],'山景')
+    svc=VideoService(db)
+    old=svc.create_project(company.id,user.id,VideoProjectCreate(title='旧视频',creation_mode='ai_creative',music_asset_id=music.id))
+    set_default_music(db,company.id,DefaultMusicSettings(selection_mode='none',music_asset_id=music.id))
+    assert company.business_goals['default_video_music']['music_asset_id'] is None
+    assert resolve_music_settings(db,company.id)['music_disabled'] is True
+    new=svc.create_project(company.id,user.id,VideoProjectCreate(title='新视频',creation_mode='ai_creative'))
+    assert new.music_disabled is True and new.music_asset_id is None
+    task=OperationTask(company_id=company.id,created_by=user.id,title='静音视频',task_type='video_generation',status='completed',output={})
+    db.add(task); db.commit()
+    agent=create_video_handoff(db,task)
+    assert agent.music_disabled is True and agent.music_asset_id is None
+    monkeypatch.setattr(settings,'VIDEO_AUDIO',True)
+    assert model_audio_enabled(new) is False
+    strip=Mock(return_value=b'silent-video')
+    monkeypatch.setattr('app.services.media_processing.remove_video_audio',strip)
+    assert apply_music(db,new,b'reused-clip-with-audio',Mock())==b'silent-video'
+    strip.assert_called_once_with(b'reused-clip-with-audio')
+    db.refresh(old)
+    assert old.music_disabled is False and old.music_asset_id==music.id
+    explicit=svc.create_project(company.id,user.id,VideoProjectCreate(title='手动指定配乐',creation_mode='ai_creative',music_asset_id=music.id))
+    assert explicit.music_disabled is False and explicit.music_asset_id==music.id
+    set_default_music(db,company.id,DefaultMusicSettings(selection_mode='fixed',music_asset_id=music.id))
+    assert resolve_music_settings(db,company.id)['music_disabled'] is False
+
+
+def test_none_music_setting_round_trips_through_api(client, db):
+    user=create_test_user(db); company=create_test_company(db,user)
+    base=f'/api/v1/companies/{company.id}'
+    response=client.put(base+'/default-video-music',headers=auth_headers(user),json={'selection_mode':'none','music_asset_id':None})
+    assert response.status_code==200,response.text
+    assert response.json()['business_goals']['default_video_music']['music_disabled'] is True
+    response=client.post(base+'/video-projects',headers=auth_headers(user),json={'title':'静音视频','creation_mode':'ai_creative','music_disabled':True})
+    assert response.status_code==201,response.text
+    assert response.json()['music_disabled'] is True
+    assert response.json()['music_asset_id'] is None
+
+
+@pytest.mark.skipif(not shutil.which('ffmpeg') or not shutil.which('ffprobe'), reason='requires ffmpeg')
+def test_remove_video_audio_preserves_frames_and_duration(tmp_path):
+    import json
+    from app.services.media_processing import remove_video_audio
+    source=tmp_path/'source.mp4'
+    subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','color=c=blue:s=64x64:r=24',
+        '-f','lavfi','-i','sine=frequency=440:sample_rate=48000','-t','1','-c:v','libx264','-c:a','aac',str(source)],check=True,capture_output=True)
+    output=tmp_path/'silent.mp4';output.write_bytes(remove_video_audio(source.read_bytes()))
+    probe=json.loads(subprocess.check_output(['ffprobe','-v','error','-show_streams','-show_format','-of','json',str(output)]))
+    assert [s['codec_type'] for s in probe['streams']]==['video']
+    assert abs(float(probe['format']['duration'])-1)<0.1
+    def frames(path):
+        return subprocess.check_output(['ffmpeg','-v','error','-i',str(path),'-map','0:v:0','-c:v','copy','-f','hash','-hash','sha256','-'])
+    assert frames(source)==frames(output)

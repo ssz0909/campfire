@@ -101,6 +101,20 @@ class AssetService:
         if category:
             query = query.filter(Asset.category == category)
         items = query.order_by(Asset.created_at.desc()).all()
+        # Final videos stay in video projects; only source media and reusable raw
+        # model clips belong in the asset library.
+        from app.models.video_project import VideoProject
+        final_video_ids = {row[0] for row in self.db.query(VideoProject.output_asset_id).filter(
+            VideoProject.company_id == company_id, VideoProject.task_id.isnot(None),
+            VideoProject.output_asset_id.isnot(None), VideoProject.is_deleted == False).all()}
+        items = [asset for asset in items if asset.id not in final_video_ids]
+        items = [asset for asset in items if not (
+            asset.asset_type == 'video' and (
+                (asset.asset_metadata or {}).get('production_mode') in {'video_model_multi_shot', 'video_model'}
+                or (asset.asset_metadata or {}).get('source_video_asset_id')
+            )
+        )]
+        items = [asset for asset in items if (asset.asset_metadata or {}).get('production_mode') != 'raw_model_clip']
         if tag:
             items=[a for a in items if tag in (a.tags or [])]
         if query_text:
@@ -135,6 +149,16 @@ class AssetService:
 
     def delete_asset(self, company_id: uuid.UUID, asset_id: uuid.UUID) -> None:
         asset = self.get_asset(company_id, asset_id)
+        if (asset.asset_metadata or {}).get('production_mode') == 'raw_model_clip':
+            from app.models.video_project import VideoProject
+            projects = self.db.query(VideoProject).filter(
+                VideoProject.company_id == company_id, VideoProject.is_deleted == False,
+                VideoProject.creation_mode != 'library_clip',
+                VideoProject.project_status.in_(['draft', 'analyzing', 'generating_shots', 'compositing', 'waiting_retry', 'pending_review']),
+            ).all()
+            if any(str(asset.id) in (str(shot.get('reused_asset_id')), str(shot.get('output_asset_id')))
+                   for project in projects for shot in (project.storyboard or []) if isinstance(shot, dict)):
+                raise HTTPException(409, '该分镜正被未完成的视频项目引用，请先完成或取消项目')
         asset.is_deleted = True
         asset.deleted_at = datetime.now(timezone.utc)
         asset.is_available = False

@@ -107,7 +107,8 @@
             </n-form-item>
           </template>
           <n-form-item label="背景音乐（可选）">
-            <MusicPicker :company-id="companyId" v-model:music-asset-id="form.music_asset_id" v-model:music-volume="form.music_volume" />
+            <n-switch v-model:value="form.music_disabled" /> <span>不使用配乐（静音，移除模型音轨）</span>
+            <MusicPicker v-if="!form.music_disabled" :company-id="companyId" v-model:music-asset-id="form.music_asset_id" v-model:music-volume="form.music_volume" />
           </n-form-item>
         </n-form>
         <p v-if="form.generation_mode === 'quality'" class="create-hint">每个成片镜头约1.5至3.5秒，开头不超过2秒。建议提供多个不同场景的清晰图片；模型片段生成后按分镜剪取，按生成镜头分别计费。每张图片只使用一次，素材不足时请补充。</p>
@@ -129,7 +130,7 @@
 import { ref, computed, reactive, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
-import { NButton, NForm, NFormItem, NInput, NSelect, type FormInst, type FormRules } from 'naive-ui'
+import { NButton, NForm, NFormItem, NInput, NSelect, NSwitch, type FormInst, type FormRules } from 'naive-ui'
 import { BulbOutline, DocumentOutline } from '@vicons/ionicons5'
 import AppPageHeader from '@/components/common/AppPageHeader.vue'
 import AppCard from '@/components/common/AppCard.vue'
@@ -164,6 +165,7 @@ const form = reactive({
   target_duration_seconds: 30,
   music_asset_id: null as string|null,
   music_volume: 0.25,
+  music_disabled: false,
 })
 
 const rules: FormRules = {
@@ -210,7 +212,8 @@ async function handleCreate() {
       selected_asset_ids: form.selected_asset_ids,
       aspect_ratio: '9:16',
       target_duration_seconds: form.target_duration_seconds,
-      music_asset_id: form.music_asset_id,
+      music_disabled: form.music_disabled,
+      music_asset_id: form.music_disabled ? null : form.music_asset_id,
       music_volume: form.music_volume,
     })
     router.push(`/video/${res.data.id}`)

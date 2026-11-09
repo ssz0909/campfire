@@ -76,7 +76,7 @@ def child_params(parent):
                   'generation_mode': params.get('generation_mode', 'quality'),
                   'reuse_policy': params.get('reuse_policy', 'fresh')}
     from copy import deepcopy
-    for key in ('industry_override', 'industry_template_snapshot'):
+    for key in ('industry_override', 'industry_template_snapshot', 'video_music', 'music_asset_id', 'music_volume', 'music_disabled'):
         if key in params:
             automation[key] = deepcopy(params[key])
     if not enabled(parent):

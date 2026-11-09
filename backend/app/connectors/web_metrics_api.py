@@ -11,6 +11,7 @@ import os
 import threading
 import time
 import uuid
+from datetime import datetime, timezone
 from http.cookiejar import Cookie
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -162,15 +163,23 @@ class ReadError(Exception):
         self.status, self.message = status, message
 
 
-def _fetch(client, template, platform, kind, *, body=None, cursor=None):
+def _fetch(client, template, platform, kind, *, body=None, cursor=None, time_window=None):
     if _kind(platform, template.get('url', ''), template.get('method')) != kind:
         raise ReadError('api_setup_required', '未找到有效的只读接口配置，请重新打开对应账号网页登录')
     parsed = urlparse(template['url'])
     # Observed calls work with these ordinary list parameters. Do not replay
     # captured tracking/signature query strings or expose them to HTTP logs.
-    query = {k: v for k, v in parse_qsl(parsed.query, keep_blank_values=True)
+    query = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True)
              if platform == 'douyin' and kind == 'list' and k in (
-                 'status', 'count', 'max_cursor', 'scene', 'device_platform', 'aid')}
+                 'status', 'count', 'max_cursor', 'scene', 'device_platform', 'aid',
+                 'fields', 'status_list[]', 'need_long_article')]
+    if platform == 'douyin' and kind == 'list' and parsed.path.rstrip('/') == '/web/api/creator/item/list':
+        # The creator endpoint omits statistics unless explicitly requested.
+        # Captured date filters go stale; only apply a window derived from jobs.
+        query = [(k, v) for k, v in query if k not in ('fields', 'count')]
+        query += [('fields', 'visibility,metrics,review'), ('count', '50')]
+        if time_window is not None:
+            query += [('start_time', str(time_window[0])), ('end_time', str(time_window[1]))]
     url = urlunparse(parsed._replace(query=urlencode(query), fragment=''))
     if cursor is not None:
         parsed = urlparse(url)
@@ -186,6 +195,8 @@ def _fetch(client, template, platform, kind, *, body=None, cursor=None):
     with client.stream(template['method'], url, **kwargs) as response:
         if response.status_code == 429:
             raise ReadError('rate_limited', '平台请求频率受限，请稍后再同步；保留上次数据')
+        if response.status_code == 401:
+            raise ReadError('login_required', '平台会话已过期，请重新登录对应账号')
         if not 200 <= response.status_code < 300:
             raise ReadError('api_unavailable', '平台接口暂不可用，请稍后重试；保留上次数据')
         content = bytearray()
@@ -204,8 +215,31 @@ def _fetch(client, template, platform, kind, *, body=None, cursor=None):
     return payload
 
 
-def collection_result(targets, records, observed_ids, complete):
+def _target_window(targets):
+    """A bounded, exhaustive time slice for first-time ID discovery only."""
+    if not targets or any(t.get('post_id') for t in targets):
+        return None
+    timestamps = []
+    for target in targets:
+        try:
+            created = datetime.fromisoformat(target['created_at'])
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            timestamps.append(created.timestamp())
+        except (ValueError, TypeError, KeyError, OverflowError):
+            return None
+    return (int((min(timestamps) - 300) * 1000), int((max(timestamps) + 86400) * 1000))
+
+
+def collection_result(targets, records, observed_ids, complete, *, discovery_records=None,
+                      discovery_complete=False):
     items = match_records(targets, records, complete)
+    if discovery_complete:
+        # Keep all local targets for known-ID claims and duplicate-job checks.
+        discovered = match_records(targets, discovery_records or [], True)
+        for target in targets:
+            if not target.get('post_id') and target['job_id'] in discovered:
+                items[target['job_id']] = discovered[target['job_id']]
     count = len(observed_ids)
     message = None if len(items) == len(targets) else (
         f'已读取 {count} 条平台作品，列表已读完整；未匹配记录请核对账号及发布文案。' if complete else
@@ -248,46 +282,73 @@ def read_work_metrics(company_id, platform, targets, expected_account_id=None, p
             expected = expected_account_id or (bundle.get('identity') or {}).get('account_fingerprint')
             if not expected or not _account_matches(identity, expected):
                 raise ReadError('identity_mismatch', '接口返回账号与绑定账号不一致，已停止采集，请检查对应账号登录')
-            records, observed, cursor, complete = [], set(), 0, False
-            body = dict(templates['list'].get('body') or {})
-            current_page = body.get('currentPage', 1)
-            if platform == 'wechat_channels' and (isinstance(current_page, bool) or not isinstance(current_page, int) or current_page not in (0, 1)):
-                raise ReadError('api_setup_required', '作品接口缺少有效首页参数，请重新打开作品管理并检查登录状态')
-            for number in range(20):
-                if time.monotonic() - started > 90:
-                    break
-                if platform == 'wechat_channels':
-                    body['currentPage'] = current_page + number
-                payload = _fetch(client, templates['list'], platform, 'list', body=body,
-                                 cursor=cursor if platform == 'douyin' else None)
-                data = payload.get('data') if platform == 'wechat_channels' else (
-                    payload if any(isinstance(payload.get(k), list) for k in ('items', 'aweme_list', 'item_list')) else payload.get('data'))
-                lists = ('list',) if platform == 'wechat_channels' else ('items', 'aweme_list', 'item_list')
-                if not isinstance(data, dict) or not any(isinstance(data.get(k), list) for k in lists):
-                    raise ReadError('api_unavailable', '平台作品接口结构已变化，未覆盖已有数据')
-                previous = len(observed)
-                for key in lists:
-                    for item in (data.get(key) or [])[:1000]:
-                        if not isinstance(item, dict):
-                            continue
-                        identifier = item.get('objectId') if platform == 'wechat_channels' else (item.get('aweme_id') or item.get('id'))
-                        if isinstance(identifier, (str, int)) and not isinstance(identifier, bool) and str(identifier):
-                            observed.add(str(identifier))
-                records.extend(extract_records(payload, platform))
-                total = data.get('totalCount') if platform == 'wechat_channels' else data.get('total')
-                more = data.get('continueFlag') if platform == 'wechat_channels' else data.get('has_more', data.get('hasMore'))
-                complete = (isinstance(more, (int, bool)) and more == 0) or (
-                    isinstance(total, int) and not isinstance(total, bool) and total >= 0 and len(observed) >= total)
-                if complete or len(observed) == previous:
-                    break
-                if platform == 'douyin':
-                    next_cursor = data.get('max_cursor')
-                    if isinstance(next_cursor, bool) or not isinstance(next_cursor, (str, int)) or str(next_cursor) == str(cursor):
+            pages_left = 20
+
+            def scan(template, scan_targets, time_window=None):
+                nonlocal pages_left
+                records, observed, cursor, complete = [], set(), 0, False
+                body = dict(template.get('body') or {})
+                current_page = body.get('currentPage', 1)
+                if platform == 'wechat_channels' and (isinstance(current_page, bool) or not isinstance(current_page, int) or current_page not in (0, 1)):
+                    raise ReadError('api_setup_required', '作品接口缺少有效首页参数，请重新打开作品管理并检查登录状态')
+                for number in range(20):
+                    if pages_left <= 0 or time.monotonic() - started > 90:
                         break
-                    cursor = next_cursor
-                elif 'lastBuff' in body and isinstance(data.get('lastBuff'), str):
-                    body['lastBuff'] = data['lastBuff']
-            return collection_result(targets, records, observed, complete)
+                    pages_left -= 1
+                    if platform == 'wechat_channels':
+                        body['currentPage'] = current_page + number
+                    payload = _fetch(client, template, platform, 'list', body=body,
+                                     cursor=cursor if platform == 'douyin' else None, time_window=time_window)
+                    data = payload.get('data') if platform == 'wechat_channels' else (
+                        payload if any(isinstance(payload.get(k), list) for k in ('items', 'aweme_list', 'item_list')) else payload.get('data'))
+                    lists = ('list',) if platform == 'wechat_channels' else ('items', 'aweme_list', 'item_list')
+                    if not isinstance(data, dict) or not any(isinstance(data.get(k), list) for k in lists):
+                        raise ReadError('api_unavailable', '平台作品接口结构已变化，未覆盖已有数据')
+                    previous = len(observed)
+                    for key in lists:
+                        for item in (data.get(key) or [])[:1000]:
+                            if not isinstance(item, dict):
+                                continue
+                            identifier = item.get('objectId') if platform == 'wechat_channels' else (item.get('aweme_id') or item.get('id'))
+                            if isinstance(identifier, (str, int)) and not isinstance(identifier, bool) and str(identifier):
+                                observed.add(str(identifier))
+                    records.extend(extract_records(payload, platform))
+                    total = data.get('totalCount') if platform == 'wechat_channels' else data.get('total')
+                    more = data.get('continueFlag') if platform == 'wechat_channels' else data.get('has_more', data.get('hasMore'))
+                    # Some Douyin endpoints report the page size as total while
+                    # has_more remains true. The explicit pagination flag wins.
+                    complete = (more == 0 if isinstance(more, (int, bool)) else
+                        isinstance(total, int) and not isinstance(total, bool) and total >= 0 and len(observed) >= total)
+                    if scan_targets and all(t.get('post_id') and any(r['post_id'] == t['post_id'] for r in records) for t in scan_targets):
+                        break
+                    if complete or len(observed) == previous:
+                        break
+                    if platform == 'douyin':
+                        next_cursor = data.get('max_cursor')
+                        if isinstance(next_cursor, bool) or not isinstance(next_cursor, (str, int)) or str(next_cursor) == str(cursor):
+                            break
+                        cursor = next_cursor
+                    elif 'lastBuff' in body and isinstance(data.get('lastBuff'), str):
+                        body['lastBuff'] = data['lastBuff']
+                return records, observed, complete
+
+            missing = [target for target in targets if not target.get('post_id')]
+            window = _target_window(missing) if platform == 'douyin' else None
+            discovery_records, discovery_ids, discovery_complete = [], set(), False
+            if window is not None:
+                # work_list has no date filter. The allowlisted creator endpoint
+                # can exhaust the publication window independently of known IDs.
+                template = templates['list']
+                if urlparse(template['url']).path.rstrip('/') != '/web/api/creator/item/list':
+                    template = {**template, 'url':
+                        'https://creator.douyin.com/web/api/creator/item/list'}
+                discovery_records, discovery_ids, discovery_complete = scan(template, [], window)
+            known = [target for target in targets if target.get('post_id')]
+            if discovery_complete and not known:
+                return collection_result(targets, discovery_records, discovery_ids, True)
+            records, observed, complete = scan(templates['list'], known if discovery_complete else targets)
+            return collection_result(targets, records, observed | discovery_ids, complete,
+                discovery_records=discovery_records, discovery_complete=discovery_complete)
     except ReadError as exc:
         return {'status': exc.status, 'items': {}, 'message': exc.message, 'transport': 'web_api'}
     except (httpx.HTTPError, OSError, ValueError, TypeError, KeyError):

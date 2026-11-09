@@ -56,9 +56,9 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, h } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { NButton, NTabs, NTab, NDataTable, NPagination, type DataTableColumns } from 'naive-ui'
-import { AddOutline, FlashOutline, RefreshOutline, CloseOutline } from '@vicons/ionicons5'
+import { AddOutline, FlashOutline, RefreshOutline, CloseOutline, CreateOutline, PlayOutline } from '@vicons/ionicons5'
 import AppPageHeader from '@/components/common/AppPageHeader.vue'
 import AppCard from '@/components/common/AppCard.vue'
 import AppEmpty from '@/components/common/AppEmpty.vue'
@@ -70,10 +70,12 @@ import type { OperationTask, TaskSchedule } from '@/types/task'
 
 const { t, locale } = useI18n()
 const router = useRouter()
+const route = useRoute()
 const authStore = useAuthStore()
 const companyId = computed(() => authStore.currentCompanyId!)
 
-const activeTab = ref('all')
+const activeTab = ref(route.query.tab === 'schedules' ? 'schedules' : 'all')
+const runningNow = ref<string | null>(null)
 const loading = ref(false)
 const tasks = ref<OperationTask[]>([])
 const error = ref('')
@@ -96,7 +98,7 @@ const columns = computed<DataTableColumns<OperationTask>>(() => [
     key: 'schedule',
     render: row => {
       const schedule = row.input_params?.schedule as TaskSchedule | undefined
-      if (!schedule) return row.input_params?.schedule_template_id ? '定时执行实例' : '单次任务'
+      if (!schedule) return row.input_params?.manual_schedule_run ? '计划手动执行实例' : row.input_params?.schedule_template_id ? '定时执行实例' : '单次任务'
       return `${schedule.frequency === 'daily' ? '每天' : '每周'} ${schedule.time} · ${row.status === 'scheduled' && schedule.next_run_at ? new Date(schedule.next_run_at).toLocaleString(locale.value) : '已暂停'}`
     },
   },
@@ -119,7 +121,15 @@ const columns = computed<DataTableColumns<OperationTask>>(() => [
     title: t('Actions'),
     key: 'actions',
     render: (row) =>
-      h('div', { style: 'display:flex;gap:8px' }, [
+      h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' }, [
+        row.input_params?.schedule && ['scheduled', 'paused'].includes(row.status)
+          ? h(NButton, { size: 'small', onClick: (e: Event) => { e.stopPropagation(); router.push(`/tasks/new?edit_schedule_id=${row.id}`) } },
+              { icon: () => h(CreateOutline), default: () => '编辑' })
+          : null,
+        row.input_params?.schedule && ['scheduled', 'paused'].includes(row.status)
+          ? h(NButton, { size: 'small', type: 'primary', secondary: true, loading: runningNow.value === row.id, disabled: runningNow.value !== null, onClick: (e: Event) => { e.stopPropagation(); runNow(row) } },
+              { icon: () => h(PlayOutline), default: () => '立刻执行' })
+          : null,
         row.input_params?.schedule
           ? h(NButton, { size: 'small', onClick: (e: Event) => { e.stopPropagation(); toggleSchedule(row) } },
               { default: () => row.status === 'scheduled' ? '暂停计划' : '恢复计划' })
@@ -187,6 +197,17 @@ async function toggleSchedule(task: OperationTask) {
     await tasksApi.setScheduleEnabled(companyId.value, task.id, task.status !== 'scheduled')
     await loadTasks()
   } catch { error.value = '定时计划更新失败，请重试。' }
+}
+
+async function runNow(task: OperationTask) {
+  if (runningNow.value) return
+  runningNow.value = task.id
+  try {
+    const result = await tasksApi.runScheduleNow(companyId.value, task.id)
+    await loadTasks()
+    await router.push(`/tasks/${result.data.id}`)
+  } catch (e: any) { error.value = typeof e.response?.data?.detail === 'string' ? e.response.data.detail : '立即执行失败，请重试。' }
+  finally { runningNow.value = null }
 }
 
 async function retryTask(task: OperationTask) {

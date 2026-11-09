@@ -124,6 +124,17 @@ def inspect_audio(content):
         return {'duration_seconds':duration,'codec':audio.get('codec_name')}
 
 
+def remove_video_audio(video):
+    """Remove all audio, including audio in reused model clips; preserve video frames."""
+    with tempfile.TemporaryDirectory(prefix='campfire-silent-') as directory:
+        source, output = Path(directory)/'input.mp4', Path(directory)/'output.mp4'
+        source.write_bytes(video)
+        subprocess.run(['ffmpeg','-v','error','-y','-protocol_whitelist','file,pipe','-i',str(source),
+            '-map','0:v:0','-c:v','copy','-an','-movflags','+faststart',str(output)],
+            capture_output=True,check=True,timeout=180)
+        return output.read_bytes()
+
+
 def replace_background_music(video, music, volume=0.25):
     """Replace all original audio; copy video frames without model generation."""
     import math

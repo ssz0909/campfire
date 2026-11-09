@@ -27,10 +27,12 @@ class VideoService:
         values=data.model_dump()
         from app.services.industry_templates import resolve_snapshot
         values['industry_template_snapshot'] = resolve_snapshot(self.db, company_id, values.get('industry_override'))
-        if 'music_asset_id' not in data.model_fields_set:
+        if not {'music_asset_id', 'music_disabled'} & data.model_fields_set:
             from app.services.video_music import resolve_music_settings
             values.update(resolve_music_settings(self.db,company_id))
         from app.services.video_music import music_asset
+        if values.get('music_disabled'):
+            values['music_asset_id'] = None
         music_asset(self.db,company_id,values.get('music_asset_id'))
         if values.get('reference_asset_id') and not values.get('selected_asset_ids'):
             values['selected_asset_ids']=[values['reference_asset_id']]
@@ -61,6 +63,7 @@ class VideoService:
             .filter(
                 VideoProject.company_id == company_id,
                 VideoProject.is_deleted == False,
+                VideoProject.creation_mode != 'library_clip',
             )
             .order_by(VideoProject.created_at.desc())
         )
@@ -95,12 +98,16 @@ class VideoService:
     ) -> VideoProject:
         project = self.get_project(company_id, project_id)
         updates=data.model_dump(exclude_unset=True)
-        if any(key in updates for key in ('music_asset_id','music_volume')):
+        if any(key in updates for key in ('music_asset_id','music_volume','music_disabled')):
             if project.project_status != 'draft':
                 raise HTTPException(409,'生成后请使用替换背景音乐功能；仅草稿可直接修改配乐配置')
             if updates.get('music_volume',0.25) is None:
                 raise HTTPException(422,'背景音乐音量不能为空')
             from app.services.video_music import music_asset
+            if updates.get('music_disabled'):
+                updates['music_asset_id'] = None
+            elif updates.get('music_asset_id'):
+                updates['music_disabled'] = False
             music_asset(self.db,company_id,updates.get('music_asset_id',project.music_asset_id))
         if 'generation_mode' in updates and updates['generation_mode'] is None:
             raise HTTPException(422,'视频生成策略不能为空')
@@ -246,6 +253,7 @@ class VideoService:
             raise HTTPException(422,'原成片不存在或不可用')
         storage = StorageService(settings.STORAGE_BACKEND)
         project.music_asset_id, project.music_volume = data.music_asset_id,data.music_volume
+        project.music_disabled = False
         try:
             content = apply_music(self.db,project,storage.get_file(source.file_key),storage)
         except Exception as exc:

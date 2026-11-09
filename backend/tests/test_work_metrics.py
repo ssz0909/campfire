@@ -278,3 +278,18 @@ def test_work_without_metrics_counts_as_read_not_missing(monkeypatch):
     assert result['record_count']==1 and result['list_complete']
     assert result['status']=='metrics_unavailable' and not result['items']
     assert '已找到作品' in result['unmatched_messages']['a']
+
+
+def test_sync_persists_discovered_work_id_for_next_refresh(db, monkeypatch):
+    _, company, _, account, job = setup(db)
+    job.provider_post_id = None
+    db.commit()
+    monkeypatch.setattr('app.connectors.web_metrics_api.read_work_metrics', lambda *args, **kwargs: {
+        'status': 'synced', 'items': {str(job.id): {'post_id': 'discovered', 'views': 123,
+            'created_at': 1793927400}}, 'record_count': 13, 'list_complete': False, 'transport': 'web_api'})
+    request_sync(db, company.id)
+    sync_account(db, company.id, account.id)
+    db.refresh(job)
+    assert job.provider_post_id == 'discovered'
+    assert job.metrics['work_sync_status'] == 'synced'
+    assert job.metrics['work_metrics']['views'] == 123

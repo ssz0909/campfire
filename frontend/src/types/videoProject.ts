@@ -54,6 +54,7 @@ export interface Shot {
 }
 
 export interface VideoProject {
+  music_disabled?: boolean
   industry_override?: string | null
   industry_template_snapshot?: import('@/api/industryTemplates').TemplateSnapshot | null
   music_asset_id?: string|null
