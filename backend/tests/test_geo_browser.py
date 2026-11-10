@@ -59,7 +59,7 @@ def test_owner_publish_search_preview_and_admin(db,client,monkeypatch,tmp_path):
         page.get_by_label('问题',exact=True).fill('如何咨询？')
         page.get_by_label('回答',exact=True).fill('通过本页公开联系方式咨询。')
         # Verify distinct styling even before any image is configured.
-        for code,expected in [('generic','classic'),('travel','scenic'),('gallery','editorial')]:
+        for code,expected in [('generic','classic'),('scenic','scenic'),('gallery','editorial')]:
             page.locator('input[name="template"][value="'+code+'"]').check()
             page.get_by_role('button',name='预览草稿',exact=True).click()
             frame=page.frame_locator('iframe')
@@ -90,7 +90,7 @@ def test_owner_publish_search_preview_and_admin(db,client,monkeypatch,tmp_path):
         expect(page.get_by_label('产品或服务名称',exact=True)).to_have_value('真实服务条目')
         page.get_by_role('button',name='预览此模板',exact=True).nth(1).click()
         frame=page.frame_locator('iframe')
-        expect(frame.get_by_role('heading',name='目的地与体验',exact=True)).to_be_visible()
+        expect(frame.get_by_role('heading',name='企业介绍',exact=True)).to_be_visible()
         expect(frame.get_by_role('img',name='浏览器验收企业公开封面')).to_have_js_property('naturalWidth',320)
         expect(frame.get_by_role('link',name='发现企业',exact=True)).to_have_count(0)
         expect(frame.get_by_role('link',name='登录工作台',exact=True)).to_have_count(0)

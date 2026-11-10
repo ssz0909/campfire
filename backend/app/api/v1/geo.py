@@ -54,6 +54,7 @@ class Content(BaseModel):
 
     @model_validator(mode='after')
     def structured_text(self):
+        if self.template=='travel':self.template='scenic'
         # Preserve legacy paragraphs when arrays are absent. Explicit [] clears a module.
         if self.service_items is not None:
             self.services = '\n\n'.join(i.name + '：' + i.description for i in self.service_items)
@@ -96,10 +97,10 @@ def read(company_id:uuid.UUID,_:User=Depends(require_permission(Permission.COMPA
     result=service.describe(service.site_for(db,company_id))
     result['suggestion']={'name':company.name,'description':company.description or '', 'industry':company.industry or ''}
     result['suggested_slug']=company.slug if service.slug_valid(company.slug) else ''
-    codes=list(dict.fromkeys([*service.DEFAULTS, *[t.code for t in db.query(GeoTemplate).all()]]))
+    codes=list(dict.fromkeys([*service.DEFAULTS, *[t.code for t in db.query(GeoTemplate).all() if t.code!='travel']]))
     result['templates']=[service.template_snapshot(db,code) for code in codes]
     for t in result['templates']:
-        if t['name']==t['code'] and t['code'] in ('generic','travel'):t['name']='通用企业' if t['code']=='generic' else '酒旅'
+        if t['code']=='generic' and t['name'] in ('generic','通用企业'):t['name']='简约名片'
     return result
 
 def checked_cover(db, company_id, asset_id):
@@ -208,11 +209,11 @@ def event(data:Event,request:Request,db:Session=Depends(get_db)):
     return {'accepted':True}
 
 def admin_templates(db):
-    codes=list(dict.fromkeys([*service.DEFAULTS,*[t.code for t in db.query(GeoTemplate).all()]]))
+    codes=list(dict.fromkeys([*service.DEFAULTS,*[t.code for t in db.query(GeoTemplate).all() if t.code!='travel']]))
     items=[]
     for code in codes:
         t=service.template_snapshot(db,code)
-        if t['name']==code and code in ('generic','travel'):t['name']='通用企业' if code=='generic' else '酒旅'
+        if code=='generic' and t['name'] in ('generic','通用企业'):t['name']='简约名片'
         if not db.get(GeoTemplate,code):t['revision']=0
         items.append(t)
     return items
@@ -248,6 +249,7 @@ def change(site_id:uuid.UUID,data:Change,user:User=Depends(require_platform_admi
 
 @router.put('/admin/geo-templates/{code}')
 def template(code:str,data:TemplateData,user:User=Depends(require_platform_admin),db:Session=Depends(get_db)):
+    if code=='travel':raise HTTPException(422,'酒旅行业模板已停用，请使用通用视觉风格新增模板')
     if not re.fullmatch(r'[a-z][a-z0-9_-]{1,63}',code):raise HTTPException(422,'模板标识无效')
     row=db.query(GeoTemplate).filter_by(code=code).with_for_update().first()
     if row and row.revision!=data.expected_revision:raise HTTPException(409,'模板已更新，请刷新')

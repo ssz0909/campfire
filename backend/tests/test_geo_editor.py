@@ -30,8 +30,8 @@ def test_preview_does_not_save_and_templates_remain_available(db,client):
     _,_,h,url=setup(db)
     db.add(GeoTemplate(code='custom',name='自定义',revision=1,config={'intro':'特别介绍'}));db.commit()
     t=client.get(url,headers=h).json()['templates']
-    assert {'generic','travel','custom'}<={i['code'] for i in t}
-    d=content();d['template']='travel';d['service_items']=[{'name':'<script>x</script>','description':'实际服务'}]
+    assert {'generic','scenic','custom'}<={i['code'] for i in t}
+    d=content();d['template']='scenic';d['service_items']=[{'name':'<script>x</script>','description':'实际服务'}]
     r=client.post(url+'/preview',headers=h,json=d)
     assert r.status_code==200,r.text
     assert r.headers['cache-control']=='no-store' and 'noindex,nofollow' in r.text
@@ -104,7 +104,7 @@ def test_three_image_layouts_privacy_and_snapshot(db,client,monkeypatch,tmp_path
         db.add(a);db.flush();ids.append(str(a.id))
     db.commit()
     d=content();d.update(cover_asset_id=ids[0],gallery_asset_ids=ids[1:3],template='gallery')
-    for code,layout in [('generic','classic'),('travel','scenic'),('gallery','editorial'),('poster','poster')]:
+    for code,layout in [('generic','classic'),('scenic','scenic'),('gallery','editorial'),('poster','poster')]:
         d['template']=code
         r=client.post(url+'/preview',headers=h,json=d)
         assert r.status_code==200,r.text
@@ -141,24 +141,32 @@ def test_admin_add_layout_template(db,client):
     assert client.put('/api/v1/admin/geo-templates/invalid-layout',headers=h,json={'name':'无效','layout':'arbitrary-html'}).status_code==422
 
 
-def test_legacy_template_layout_defaults_and_explicit_override(db,client):
-    _,_,h,url=setup(db)
-    db.add(GeoTemplate(code='travel',name='酒旅',revision=1,config={'intro':'原有标题'}));db.commit()
-    templates=client.get(url,headers=h).json()['templates']
-    assert next(t for t in templates if t['code']=='travel')['config']['layout']=='scenic'
-    for code,layout in [('generic','classic'),('travel','scenic'),('gallery','editorial')]:
-        d=content();d['template']=code
-        r=client.post(url+'/preview',headers=h,json=d)
-        assert 'class="layout-'+layout+'"' in r.text
-        assert '安吉测试酒店' in r.text
-    row=db.get(GeoTemplate,'travel');row.config={**row.config,'layout':'poster'};db.commit()
-    assert next(t for t in client.get(url,headers=h).json()['templates'] if t['code']=='travel')['config']['layout']=='poster'
+def test_retired_industry_template_compatibility(db,client,monkeypatch):
+    from app.models.geo import GeoSite
+    user,company,h,url=setup(db)
+    old={'intro':'目的地与体验','services':'住宿与游览服务','faq':'出行问答','layout':'scenic'}
+    db.add(GeoTemplate(code='travel',name='酒旅',revision=1,config=old))
+    site=GeoSite(company_id=company.id,draft={**content(),'template':'travel'},live={**content(),'template':'travel','template_snapshot':{'code':'travel','config':old}},status='draft')
+    db.add(site);db.commit()
+    r=client.get(url,headers=h).json()
+    assert 'travel' not in [t['code'] for t in r['templates']]
+    assert r['draft']['template']=='scenic'
+    assert db.get(GeoSite,site.id).live['template_snapshot']['config']==old
+    assert geo.template_snapshot(db,'travel')['code']=='scenic'
+    d=content();d['template']='travel'
+    r=client.post(url+'/preview',headers=h,json=d)
+    assert r.status_code==200 and 'layout-scenic' in r.text and '目的地与体验' not in r.text
+    assert client.put(url+'/draft',headers=h,json={'expected_revision':site.revision,'content':d}).json()['draft']['template']=='scenic'
+    user.is_platform_admin=True;db.commit()
+    templates=client.get('/api/v1/admin/geo',headers=h).json()['templates']
+    assert 'travel' not in [t['code'] for t in templates]
+    assert client.put('/api/v1/admin/geo-templates/travel',headers=h,json={'name':'酒旅'}).status_code==422
 
 
 def test_full_framework_preview_never_persists_placeholders(db,client,monkeypatch):
     user,company,h,url=setup(db)
     monkeypatch.setattr(geo,'index_site',lambda *a:None)
-    for code in ['generic','travel','gallery','poster']:
+    for code in ['generic','scenic','gallery','poster']:
         r=client.post(url+'/preview',headers=h,json={'template':code})
         assert r.status_code==200,r.text
         for marker in ['公开封面位置','补充图片 1 位置','补充图片 2 位置','id="description"','id="services"','id="faq"','id="contact"','未填写 · 位置示意']:

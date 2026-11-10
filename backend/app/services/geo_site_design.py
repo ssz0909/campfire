@@ -3,6 +3,7 @@ import re
 
 LAYOUTS = {'classic': '简约名片', 'scenic': '全景展示', 'editorial': '画册展示', 'poster': '品牌海报'}
 TEMPLATES = {
+    'scenic': {'name': '全景展示', 'layout': 'scenic', 'accent': '#28766a'},
     'gallery': {'name': '画册展示', 'layout': 'editorial', 'accent': '#34675b'},
     'poster': {'name': '品牌海报', 'layout': 'poster', 'accent': '#aa5937'},
 }
