@@ -68,3 +68,7 @@
 ## 完整模板预览与三图发布门槛（2026-11-10）
 
 源码 `5ff539d`；发布目录 `/opt/campfire/releases/geo-framework-20261110T032211Z`，备份与回退脚本 `/opt/campfire/backups/before-geo-framework-20261110T032211Z/rollback.sh`，含数据库、原发布目录和Nginx备份，无数据库迁移。21项GEO/llms/浏览器测试通过，含无资料全框架占位、图片位置、占位不持久化、缺图/重复图发布拒绝、大窗口预览；矩阵任务电脑手机回归通过。线上前端入口与GeoView产物SHA256一致，健康检查正常。旧公开快照保留，再发布需三张不同图片。
+
+## GEO取消行业模板（2026-11-10）
+
+源码 `2ebd23a`，发布目录 `/opt/campfire/releases/geo-style-only-20261110T033919Z`，备份/回退 `/opt/campfire/backups/before-geo-style-only-20261110T033919Z/rollback.sh`，含数据库、原发布目录和Nginx，无数据库迁移。GEO改为四种通用视觉风格，历史travel草稿映射scenic，公开历史快照保留。21项相关测试、矩阵任务电脑手机回归通过；现网入口与GeoView产物校验一致，健康检查正常。
