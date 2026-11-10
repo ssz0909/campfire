@@ -72,3 +72,9 @@
 ## GEO取消行业模板（2026-11-10）
 
 源码 `2ebd23a`，发布目录 `/opt/campfire/releases/geo-style-only-20261110T033919Z`，备份/回退 `/opt/campfire/backups/before-geo-style-only-20261110T033919Z/rollback.sh`，含数据库、原发布目录和Nginx，无数据库迁移。GEO改为四种通用视觉风格，历史travel草稿映射scenic，公开历史快照保留。21项相关测试、矩阵任务电脑手机回归通过；现网入口与GeoView产物校验一致，健康检查正常。
+
+## 四图主页与图文排版（2026-11-10）
+
+源码 `401aee6`；发布目录 `/opt/campfire/releases/geo-four-20261110T040527Z`。备份与回退脚本 `/opt/campfire/backups/before-geo-four-20261110T040527Z/rollback.sh`，包含数据库、原发布目录及Nginx配置；无需数据库迁移。253个现网基线源码校验一致，切换前两次确认发布/视频/数字员工执行数为0。
+
+支持封面＋最多三张补充图（至少三张不同图片发布）、图片排序和按栏目穿插展示，优化联系入口、画册图文分栏与手机布局。21项GEO/llms/编辑器/浏览器测试通过，矩阵任务和定时任务电脑/手机回归通过。公网入口与GeoView产物逐字节一致，健康检查正常。
