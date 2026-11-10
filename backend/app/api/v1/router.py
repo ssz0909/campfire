@@ -40,3 +40,6 @@ router.include_router(callbacks.router, tags=["callbacks"])
 
 from app.api.v1 import geo
 router.include_router(geo.router, tags=["geo"])
+
+from app.api.v1 import webmaster
+router.include_router(webmaster.router)

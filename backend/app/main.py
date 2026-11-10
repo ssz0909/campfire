@@ -26,7 +26,13 @@ async def lifespan(app: FastAPI):
     if settings.EXECUTION_AUTOMATION_ENABLED:
         from app.services.execution_automation import start
         stop = start()
+    webmaster_stop = None
+    if settings.EXECUTION_AUTOMATION_ENABLED:
+        from app.services.webmaster import start as start_webmaster
+        webmaster_stop = start_webmaster()
     yield
+    if webmaster_stop:
+        webmaster_stop.set()
     if stop:
         stop.set()
     from app.connectors.web_platform import shutdown_sessions

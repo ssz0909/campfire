@@ -8,6 +8,7 @@
       <p class="muted">{{ result.metrics.definition }}</p>
       <div class="columns"><div><h3>每日浏览</h3><p v-if="!views.length">所选时间内暂无浏览事件</p><div v-for="r in views" :key="r.day" class="trend"><span>{{ r.day }}</span><meter :value="r.count" :max="maxView"/><b>{{ r.count }}</b></div></div><div><h3>访问来源</h3><p v-if="!Object.keys(result.metrics.sources).length">暂无来源数据</p><p v-for="(v,k) in result.metrics.sources" :key="k">{{ k }}：{{ v }}</p></div></div>
       <p v-for="key in ['external_search','model_citations','consultations']" :key="key" class="muted">{{ result.metrics[key].message }}</p>
+      <div v-if="result.metrics.external_search.items?.length" class="search-results"><h3>外部搜索表现</h3><article v-for="item in result.metrics.external_search.items" :key="item.provider"><strong>{{ item.name }}</strong><p>曝光 {{ item.impressions }} · 点击 {{ item.clicks }} · 点击率 {{ (item.ctr*100).toFixed(2) }}%<span v-if="item.average_position!=null"> · 平均排名 {{ item.average_position.toFixed(1) }}</span></p><small>数据截至 {{ item.last_data_day }} · 来源：{{ item.sources.join('；') }}</small></article></div>
       <small>时区：{{ result.metrics.timezone }} · 最近读取：{{ new Date(result.metrics.updated_at).toLocaleString() }}</small></template>
       <p v-else>尚未创建公开主页。请先到GEO配置并发布，发布后开始采集。</p>
     </template>

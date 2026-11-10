@@ -70,3 +70,17 @@ class GeoFeedback(UUIDMixin, TimestampMixin, Base):
     message: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(24), default='open', index=True)
     resolution: Mapped[str] = mapped_column(Text, default='')
+
+class GeoSearchDaily(Base):
+    """Provider-reported page/day totals; retries replace, never increment."""
+    __tablename__ = 'geo_search_daily'
+    provider: Mapped[str] = mapped_column(String(20), primary_key=True)
+    page: Mapped[str] = mapped_column(String(1000), primary_key=True)
+    day: Mapped[str] = mapped_column(String(10), primary_key=True, index=True)
+    site_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey('geo_sites.id'), nullable=True, index=True)
+    clicks: Mapped[int] = mapped_column(Integer)
+    impressions: Mapped[int] = mapped_column(Integer)
+    position: Mapped[float | None] = mapped_column(nullable=True)
+    source: Mapped[str] = mapped_column(String(30))
+    source_name: Mapped[str] = mapped_column(String(160))
+    updated_at: Mapped[object] = mapped_column(DateTime(timezone=True))

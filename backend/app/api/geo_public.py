@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.geo import GeoSite, GeoSlug
 from app.models.company import Company
-from app.services import geo, public_design
+from app.services import geo, public_design, webmaster
 
 router=APIRouter()
 ORIGIN='https://campfire.dawoai.com'
@@ -24,9 +24,9 @@ def script(site_id=None,kind='view'):
     # to origin before transmission to avoid leaking query strings.
     return '''<script>(()=>{let v='';try{v=sessionStorage.getItem('cf-geo-v')||crypto.randomUUID();sessionStorage.setItem('cf-geo-v',v)}catch{}let ref='';try{ref=new URL(document.referrer).origin}catch{}function emit(kind,site,token){fetch('/api/v1/public/geo/events',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({event_id:crypto.randomUUID(),kind,site_id:site,token:token||pageToken,visitor:v,referrer:ref,self_test:new URLSearchParams(location.search).has('self_test')}),keepalive:true}).catch(()=>{})}const site='''+json.dumps(str(site_id) if site_id else None)+''',pageToken='''+json.dumps(geo.event_token(site_id))+''';emit('view',site);const f=document.getElementById('feedback-form');if(f)f.addEventListener('submit',async ev=>{ev.preventDefault();const out=document.getElementById('feedback-result');try{const r=await fetch('/api/v1/public/geo/feedback',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({site_id:site,message:f.elements.message.value})});out.textContent=r.ok?'反馈已收到':'提交失败，请稍后重试';if(r.ok)f.reset()}catch{out.textContent='网络异常，请稍后重试'}});const observer=new IntersectionObserver(entries=>entries.forEach(entry=>{if(entry.isIntersecting){emit('search_impression',entry.target.dataset.site,entry.target.dataset.token);observer.unobserve(entry.target)}}),{threshold:0.5});document.querySelectorAll('[data-site]').forEach(a=>{const id=a.dataset.site;observer.observe(a);if(new URLSearchParams(location.search).has('self_test'))a.href+='?self_test=1';a.addEventListener('click',()=>emit('search_click',id,a.dataset.token))});document.querySelectorAll('[data-contact]').forEach(a=>a.addEventListener('toggle',()=>{if(a.open)emit('contact',site)}))})()</script>'''
 
-def page(title,body,path='/',description='',schema=None,extra='',preview=False):
+def page(title,body,path='/',description='',schema=None,extra='',preview=False,head_extra=''):
     structured=json.dumps(schema or {'@context':'https://schema.org','@type':'Organization','name':'营火AI','url':ORIGIN},ensure_ascii=False).replace('<','\\u003c')
-    return HTMLResponse('<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'+e(title)+'</title><meta name="description" content="'+e(description)+'"><link rel="alternate" type="text/plain" href="/llms.txt" title="LLM内容导航"><link rel="canonical" href="'+ORIGIN+e(path)+'">'+('<meta name="robots" content="noindex,nofollow">' if preview else '')+'<style>'+CSS+'</style><script type="application/ld+json">'+structured+'</script></head><body><header><a class="logo" href="/">'+public_design.BRAND_ICON+'营火AI</a><nav><a href="/search">发现企业</a><a class="nav-business" href="/business">企业服务</a><a class="nav-login" href="/login">登录工作台</a></nav></header><main>'+body+'</main>'+public_design.footer()+extra+'</body></html>',headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'strict-origin-when-cross-origin'})
+    return HTMLResponse('<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'+e(title)+'</title><meta name="description" content="'+e(description)+'"><link rel="alternate" type="text/plain" href="/llms.txt" title="LLM内容导航"><link rel="canonical" href="'+ORIGIN+e(path)+'">'+('<meta name="robots" content="noindex,nofollow">' if preview else '')+head_extra+'<style>'+CSS+'</style><script type="application/ld+json">'+structured+'</script></head><body><header><a class="logo" href="/">'+public_design.BRAND_ICON+'营火AI</a><nav><a href="/search">发现企业</a><a class="nav-business" href="/business">企业服务</a><a class="nav-login" href="/login">登录工作台</a></nav></header><main>'+body+'</main>'+public_design.footer()+extra+'</body></html>',headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'strict-origin-when-cross-origin'})
 
 def form(q='',region='',industry=''):
     return '<form action="/search"><input name="q" maxlength="120" aria-label="企业或服务需求" placeholder="搜索企业，或试试：安吉亲子酒店" value="'+e(q)+'"><input name="region" maxlength="120" aria-label="地区筛选" placeholder="地区（可选）" value="'+e(region)+'"><input name="industry" maxlength="80" aria-label="行业筛选" placeholder="行业（可选）" value="'+e(industry)+'"><button>搜索</button></form>'
@@ -48,7 +48,7 @@ def public_media(filename:str):
 def home(db:Session=Depends(get_db)):
     result=geo.search(db,'',size=3)
     body=public_design.hero()+public_design.showcase()+'<section class="home-discover" id="discover"><div class="section-head"><div><p class="section-kicker">DISCOVER WITH CAMPFIRE</p><h2>发现企业与服务</h2><p>搜索企业名称，看看它的公开主页。</p></div><a href="/search">浏览全部企业 <span aria-hidden="true">↗</span></a></div>'+form()+ '<p class="home-scope">营火站内搜索 · 依据企业已发布的公开资料匹配</p>'+cards(result)+'</section>'+public_design.benefits()
-    return page('营火AI｜AI运营平台',body,description='营火AI为小企业提供数字员工、内容制作、多账号发布、企业公开主页与效果统计。',extra=script())
+    return page('营火AI｜AI运营平台',body,description='营火AI为小企业提供数字员工、内容制作、多账号发布、企业公开主页与效果统计。',extra=script(),head_extra=webmaster.verification_tags(db))
 
 @router.get('/search',response_class=HTMLResponse)
 def search(request:Request,q:str=Query('',max_length=120),region:str=Query('',max_length=120),industry:str=Query('',max_length=80),p:int=Query(1,ge=1,le=10000),db:Session=Depends(get_db)):

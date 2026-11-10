@@ -252,6 +252,7 @@ def event(db,site_id,key,kind,source='',visitor='',audience='unknown'):
     db.commit()
 
 def metrics(db,site=None,days=30,homepage=False):
+    from app.services import webmaster
     cutoff=(datetime.now(ZoneInfo('Asia/Shanghai')).date()-timedelta(days=days-1)).isoformat()
     query=db.query(GeoDaily).filter(GeoDaily.day>=cutoff)
     visitors_query=db.query(GeoVisitor).filter(GeoVisitor.day>=cutoff)
@@ -268,7 +269,7 @@ def metrics(db,site=None,days=30,homepage=False):
     sources=clean.filter(GeoDaily.kind=='view').with_entities(GeoDaily.source,func.sum(GeoDaily.count)).group_by(GeoDaily.source).all()
     return {'days':days,'counts':counts,'daily_visitor_estimates':visitors,'trend':[{'day':d,'kind':k,'count':n} for d,k,n in trends],
        'sources':dict(sources),'bots':query.filter(GeoDaily.audience=='bot').with_entities(func.coalesce(func.sum(GeoDaily.count),0)).scalar(),
-       'external_search':{'status':'not_connected','message':'未接入站长工具，暂无搜索曝光或收录证据'},
+       'external_search':webmaster.external_metrics(db,site,days,homepage),
        'model_citations':{'status':'not_connected','message':'未配置联网检索监测渠道，暂无引用样本'},
        'consultations':{'status':'not_connected','message':'联系点击不等于实际咨询；尚未接入客服或咨询表单'},
        'timezone':'Asia/Shanghai','updated_at':datetime.now(timezone.utc).isoformat(),

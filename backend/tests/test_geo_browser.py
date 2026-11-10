@@ -157,7 +157,30 @@ def test_owner_publish_search_preview_and_admin(db,client,monkeypatch,tmp_path):
         page.get_by_role('button',name='GEO运营数据',exact=True).click()
         expect(page.get_by_role('heading',name='GEO运营数据')).to_be_visible()
         expect(page.get_by_text('browser-example',exact=False)).to_be_visible()
+        expect(page.get_by_role('heading',name='站长工具接入',exact=True)).to_be_visible()
+        google=page.locator('.channel').filter(has=page.get_by_role('heading',name='Google Search Console',exact=True))
+        google.get_by_label('HTML验证标签或content值').fill('browser-google-verification')
+        google.get_by_role('button',name='保存Google Search Console配置',exact=True).click()
+        expect(page.locator('.webmaster [role="status"]')).to_contain_text('配置已保存')
+        assert 'content="browser-google-verification"' in client.get('/').text
+        expect(google.get_by_role('button',name='同步Google搜索表现')).to_be_disabled()
+        bing=page.locator('.channel').filter(has=page.get_by_role('heading',name='Bing Webmaster Tools',exact=True))
+        bing.get_by_text('导入Bing Webmaster Tools搜索表现报表',exact=True).click()
+        bing.get_by_label('报表来源说明').fill('Bing站长真实报表浏览器验收')
+        from datetime import date
+        csv=f'day,page,clicks,impressions,position\n{date.today()},https://campfire.dawoai.com/shop/browser-example,2,20,3\n'
+        bing.get_by_label('选择CSV文件').set_input_files({'name':'report.csv','mimeType':'text/csv','buffer':csv.encode()})
+        bing.get_by_label('我确认这是该渠道导出的真实数据，不是估算或模拟数据').check()
+        bing.get_by_role('button',name='导入报表',exact=True).click()
+        expect(page.locator('.webmaster [role="status"]')).to_contain_text('已导入 1 条，匹配企业 1 条')
+        page.set_viewport_size({'width':390,'height':844})
+        assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+        page.locator('.webmaster').screenshot(path='/tmp/campfire-webmaster-mobile.png')
+        page.set_viewport_size({'width':1440,'height':1000})
         page.screenshot(path='/tmp/campfire-geo-admin.png',full_page=True)
+        page.goto('https://campfire.dawoai.com/geo')
+        expect(page.get_by_role('heading',name='外部搜索表现',exact=True)).to_be_visible()
+        expect(page.get_by_text('曝光 20 · 点击 2',exact=False)).to_be_visible()
         assert not errors,errors
         browser.close()
 

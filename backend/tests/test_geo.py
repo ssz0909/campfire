@@ -89,7 +89,7 @@ def test_events_dedupe_bots_selftest(db,client,monkeypatch):
     result=client.get(url+'/metrics',headers=h).json()['metrics']
     assert result['counts']['view']==1
     assert result['bots']==1
-    assert result['external_search']['status']=='not_connected'
+    assert result['external_search']['status']=='no_data'
     assert client.post('/api/v1/public/geo/events',json={'event_id':str(uuid.uuid4()),'site_id':str(uuid.uuid4()),'kind':'view'}).status_code==404
 
 
