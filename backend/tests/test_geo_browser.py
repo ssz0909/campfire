@@ -49,6 +49,7 @@ def test_owner_publish_search_preview_and_admin(db,client,monkeypatch,tmp_path):
         page.goto('https://campfire.dawoai.com/geo')
         expect(page.get_by_role('heading',name='GEO · 企业公开主页')).to_be_visible()
         page.get_by_label('公开网址标识').fill('browser-example')
+        expect(page.locator('.public-address')).to_contain_text('https://campfire.dawoai.com/shop/browser-example')
         page.get_by_label('公开名称',exact=True).fill('浏览器验收企业')
         page.get_by_label('企业介绍',exact=True).fill('企业的真实产品和服务介绍，只用于隔离测试。')
         page.get_by_label('公开联系信息',exact=True).fill('测试联系渠道')
@@ -198,4 +199,37 @@ def test_public_layout_widths_and_service_counts():
                 if count==5:
                     page.set_viewport_size({'width':1440,'height':1000})
                     page.screenshot(path='/tmp/geo-balanced-'+layout+'.png',full_page=True)
+        browser.close()
+
+
+def test_enterprise_images_keep_full_original_ratio():
+    from types import SimpleNamespace
+    from datetime import datetime, timezone
+    from urllib.parse import quote
+    from app.api.geo_public import render_site
+    from app.services.geo_site_design import LAYOUTS
+    site=SimpleNamespace(slug='image-test',company_id='test',published_at=datetime.now(timezone.utc),id='test')
+    with sync_playwright() as pw:
+        browser=pw.chromium.launch(headless=True)
+        page=browser.new_page()
+        for layout in LAYOUTS:
+            for iw,ih in ((1200,400),(800,600),(400,800)):
+                image='data:image/svg+xml,'+quote(f'<svg xmlns="http://www.w3.org/2000/svg" width="{iw}" height="{ih}"><rect width="100%" height="100%" fill="#437c70"/><rect x="2" y="2" width="{iw-4}" height="{ih-4}" fill="none" stroke="white" stroke-width="4"/></svg>')
+                d={'name':'完整图片验收','description':'企业介绍','services':'服务说明','contact':'联系渠道',
+                   'template_snapshot':{'config':{'layout':layout}},'_preview_cover_url':image,'_preview_gallery_urls':[image]*3}
+                page.set_content(render_site(site,d,preview=True).body.decode())
+                expect(page.locator('img')).to_have_count(4)
+                for width in (1440,390):
+                    page.set_viewport_size({'width':width,'height':1000})
+                    for img in page.locator('img').all():
+                        img.scroll_into_view_if_needed()
+                        expect(img).to_have_js_property('naturalWidth',iw)
+                        box=img.bounding_box()
+                        assert abs(box['height']-box['width']*ih/iw)<2,(layout,width,iw,ih,box)
+                        assert img.evaluate('(el)=>getComputedStyle(el).borderRadius')=='0px'
+                        parent=img.locator('..').bounding_box()
+                        assert box['y']>=parent['y']-1 and box['y']+box['height']<=parent['y']+parent['height']+1
+                    assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+                if layout=='poster' and iw==800:
+                    page.screenshot(path='/tmp/geo-uncropped-poster-mobile.png',full_page=True)
         browser.close()
