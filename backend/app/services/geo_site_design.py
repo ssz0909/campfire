@@ -17,10 +17,6 @@ CSS = '''
 @media(max-width:1000px){.service-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.service-grid>.card,.service-grid:has(>.card:nth-child(4):last-child)>.card,.service-grid>.card:nth-last-child(2):nth-child(3n+1),.service-grid>.card:last-child:nth-child(3n+2){grid-column:auto}.service-grid>.card:last-child:nth-child(odd){grid-column:1/-1}}
 @media(max-width:650px){.service-grid{grid-template-columns:minmax(0,1fr)}.service-grid>.card{grid-column:1/-1!important}.layout-editorial #description .module-content:has(.section-photo){grid-template-columns:minmax(0,1fr)}}
 
-/* Preserve each uploaded image in full, including portrait and panoramic originals. */
-img.cover,.section-photo img,.photo-pair img{height:auto!important;max-height:none;object-fit:contain;border-radius:0}.section-photo,.layout-scenic .section-photo,.layout-editorial .section-photo{border-radius:0}.section-photo:hover img{transform:none}
-.layout-scenic img.cover,.layout-editorial img.cover{border-radius:0}.layout-poster .site-hero{display:flex;flex-direction:column;align-items:stretch;min-height:0;padding:0;gap:0;overflow:visible;border-radius:0}.layout-poster .site-hero .cover{position:static;inset:auto;z-index:auto;order:-1;width:100%;border-radius:0}.layout-poster .site-hero:after{display:none}.layout-poster .site-hero .hero-copy{max-width:none;padding:28px}.layout-poster .site-hero .image-placeholder{position:static;inset:auto;z-index:auto;order:-1;height:320px;padding:24px;justify-content:center}
-
 
 '''
 
