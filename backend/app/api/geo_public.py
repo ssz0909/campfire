@@ -92,7 +92,7 @@ def render_site(site,d,section='',preview=False):
             items=d.get('service_items' if key=='services' else 'faq_items') if key!='description' else None
             if items:
                 if key=='services':
-                    content='<div class="grid">'+''.join('<article class="card"><h3>'+e(i['name'])+'</h3><p>'+e(i['description'])+'</p></article>' for i in items)+'</div>'
+                    content='<div class="grid service-grid">'+''.join('<article class="card"><h3>'+e(i['name'])+'</h3><p>'+e(i['description'])+'</p></article>' for i in items)+'</div>'
                 else:
                     content=''.join('<article><h3>'+e(i['question'])+'</h3><p class="facts">'+e(i['answer'])+'</p></article>' for i in items)
             elif d.get(key):content='<div class="facts">'+e(d[key])+'</div>'

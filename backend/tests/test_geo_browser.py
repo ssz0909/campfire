@@ -159,3 +159,43 @@ def test_owner_publish_search_preview_and_admin(db,client,monkeypatch,tmp_path):
         page.screenshot(path='/tmp/campfire-geo-admin.png',full_page=True)
         assert not errors,errors
         browser.close()
+
+
+def test_public_layout_widths_and_service_counts():
+    """Exercise actual CSS geometry for short/long content and incomplete card rows."""
+    from types import SimpleNamespace
+    from datetime import datetime, timezone
+    from app.api.geo_public import render_site
+    from app.services.geo_site_design import LAYOUTS
+    site=SimpleNamespace(slug='layout-test',company_id='test',published_at=datetime.now(timezone.utc),id='test')
+    with sync_playwright() as pw:
+        browser=pw.chromium.launch(headless=True)
+        page=browser.new_page()
+        for layout in LAYOUTS:
+            for count in (1,2,3,4,5,7,8):
+                d={'name':'排版验收企业','description':'企业介绍文字。'*35,'services':'真实产品与服务',
+                   'service_items':[{'name':f'服务 {i+1}','description':'依据企业资料提供的真实服务说明。'*(i+1)} for i in range(count)],
+                   'template_snapshot':{'config':{'layout':layout}},'_preview_gallery_urls':[],
+                   'contact':'联系渠道'}
+                page.set_content(render_site(site,d,preview=True).body.decode())
+                for width in (1440,820,390):
+                    page.set_viewport_size({'width':width,'height':1000})
+                    assert page.evaluate('document.documentElement.scrollWidth<=innerWidth'),(layout,count,width)
+                    copy=page.locator('#services .module-copy').bounding_box()
+                    area=page.locator('#services .module-content').bounding_box()
+                    photo=page.locator('#services .section-photo').bounding_box()
+                    assert abs(copy['width']-area['width'])<2,(layout,count,width,copy,area)
+                    assert abs(copy['width']-photo['width'])<2,(layout,count,width)
+                    intro=page.locator('#description .module-copy').bounding_box()
+                    intro_photo=page.locator('#description .section-photo').bounding_box()
+                    assert abs(intro['width']-intro_photo['width'])<2,(layout,count,width)
+                    cards=[c.bounding_box() for c in page.locator('.service-grid>.card').all()]
+                    rows={}
+                    for box in cards:rows.setdefault(round(box['y']),[]).append(box)
+                    for row in rows.values():
+                        assert abs(min(c['x'] for c in row)-copy['x'])<2,(layout,count,width)
+                        assert abs(max(c['x']+c['width'] for c in row)-(copy['x']+copy['width']))<2,(layout,count,width,row)
+                if count==5:
+                    page.set_viewport_size({'width':1440,'height':1000})
+                    page.screenshot(path='/tmp/geo-balanced-'+layout+'.png',full_page=True)
+        browser.close()
