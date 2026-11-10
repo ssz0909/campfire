@@ -60,3 +60,7 @@
 - 备份 `/opt/campfire/backups/before-geo-style-20261109T145649Z` 含完整原发布目录、数据库与Nginx配置，可执行 `rollback.sh` 返回 `/opt/campfire/releases/geo-generic-20261109T142950Z`；本次无需数据库迁移。
 - 252个基线源码文件校验一致，切换前两次确认发布/视频/数字员工执行数均为0。企业页切换独立渲染器，官网保持平台壳层；新增经典、画册、海报布局及最多三图配置，管理员可基于注册布局添加模板。
 - 19项GEO/llms/编辑器/浏览器用例通过，含三图权限、草稿图片隐私、撤回、管理员布局模板及电脑手机宽度；任务矩阵与定时任务UI回归通过。公网入口和GeoView产物与本地构建SHA256一致，健康检查正常。
+
+## 模板预览差异修复（2026-11-10）
+
+源码 `bb7a2a1`，发布目录 `/opt/campfire/releases/geo-distinct-20261110T030632Z`，备份及回退脚本 `/opt/campfire/backups/before-geo-distinct-20261110T030632Z/rollback.sh`。备份包含数据库、原发布目录及Nginx配置，无数据库迁移。GEO/llms相关20项测试通过，额外浏览器验证无图的classic/scenic/editorial布局计算样式确有区别；任务矩阵电脑/手机回归通过。公网入口及GeoView产物校验一致，现网生效配置确认通用classic、酒旅scenic、画册editorial，旧数据库缺失layout已由默认配置补齐，显式自定义布局保留。
