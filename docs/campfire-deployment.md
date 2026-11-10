@@ -90,3 +90,7 @@
 源码 `7a6886e`；发布目录 `/opt/campfire/releases/geo-uncropped-20261110T070304Z`。备份与回退 `/opt/campfire/backups/before-geo-uncropped-20261110T070304Z/rollback.sh`，含数据库、原发布目录和Nginx，无数据库迁移；253个基线源码校验一致，两次确认发布/视频/数字员工执行为0。
 
 公开网址展示完整域名；封面及展示图按原始比例完整显示，海报模板取消背景裁切与文字遮盖。23项GEO/llms/浏览器测试通过，含四模板、横图/竖图与电脑/手机图片比例、父容器边界；矩阵及定时任务UI回归通过。公网前端入口、GeoView产物、公开页CSS与本地一致，健康正常。
+
+## 恢复图片裁切展示（2026-11-10）
+
+源码 `0fff344`；发布目录 `/opt/campfire/releases/geo-image-restore-20261110T071148Z`，备份与回退 `/opt/campfire/backups/before-geo-image-restore-20261110T071148Z/rollback.sh`，含数据库、原目录和Nginx，无数据库迁移。恢复 `beef91d` 的图片样式，保留完整公开网址和正文/服务分栏修复。253个基线源码校验一致，切换前两次确认执行数为0。22项GEO/llms/浏览器测试通过，前端构建通过；现网前端入口、GeoView及公开CSS一致，健康正常。
