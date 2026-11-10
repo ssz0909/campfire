@@ -21,7 +21,7 @@ def test_owner_publish_search_preview_and_admin(db,client,monkeypatch,tmp_path):
     Image.open(Path(__file__).resolve().parents[1]/'app/public_media/hospitality.webp').resize((320,200)).save(tmp_path/'cover.png')
     asset=Asset(company_id=company.id,uploaded_by=user.id,name='图片封面验收',original_filename='cover.png',file_key='cover.png',file_url='/files/cover.png',asset_type='image',mime_type='image/png',file_size_bytes=500,processing_status='ready')
     db.add(asset);db.commit()
-    for i in (1,2):
+    for i in (1,2,3):
         db.add(Asset(company_id=company.id,uploaded_by=user.id,name=f'展示验收{i}',original_filename=f'extra{i}.png',file_key='cover.png',file_url='/files/cover.png',asset_type='image',mime_type='image/png',file_size_bytes=500,processing_status='ready'))
     db.commit()
     from app.services import geo_writing
@@ -83,6 +83,11 @@ def test_owner_publish_search_preview_and_admin(db,client,monkeypatch,tmp_path):
         page.get_by_role('dialog').locator('article').filter(has_text='展示验收1').get_by_role('button',name='添加展示图片',exact=True).click()
         page.get_by_role('button',name='添加展示图片',exact=True).click()
         page.get_by_role('dialog').locator('article').filter(has_text='展示验收2').get_by_role('button',name='添加展示图片',exact=True).click()
+        page.get_by_role('button',name='添加展示图片',exact=True).click()
+        page.get_by_role('dialog').locator('article').filter(has_text='展示验收3').get_by_role('button',name='添加展示图片',exact=True).click()
+        expect(page.get_by_role('button',name='添加展示图片',exact=True)).to_be_disabled()
+        page.get_by_role('button',name='前移',exact=True).nth(2).click()
+        page.get_by_role('button',name='后移',exact=True).nth(1).click()
         page.get_by_role('button',name='AI整理文案',exact=True).click()
         expect(page.get_by_role('dialog')).to_be_visible()
         expect(page.get_by_role('dialog').get_by_text('AI建议服务',exact=True)).to_be_visible()

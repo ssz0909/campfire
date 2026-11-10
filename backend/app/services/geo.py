@@ -47,8 +47,8 @@ def validate(content):
         if not content.get(key,'').strip(): issues.append(label+'不能为空')
     images=[content.get('cover_asset_id'),*content.get('gallery_asset_ids',[])]
     if not content.get('cover_asset_id'):issues.append('请选择一张公开封面')
-    if len(content.get('gallery_asset_ids',[]))!=2:issues.append('请选择两张补充展示图片')
-    if len(images)==3 and len(set(images))!=3:issues.append('封面和补充图片请使用三张不同的素材')
+    if not 2<=len(content.get('gallery_asset_ids',[]))<=3:issues.append('请选择2至3张补充展示图片')
+    if len(set(images))!=len(images):issues.append('封面和补充图片请使用不同的素材')
     if not content.get('confirmed'): issues.append('请确认公开资料真实且已获得公开授权')
     for fact in content.get('facts',[]):
         if fact.get('status')!='confirmed':issues.append('事实“'+fact.get('key','')+'”尚未确认')

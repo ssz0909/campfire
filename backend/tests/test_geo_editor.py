@@ -117,10 +117,24 @@ def test_three_image_layouts_privacy_and_snapshot(db,client,monkeypatch,tmp_path
     assert client.post(url+'/publish',headers=h,json={'expected_revision':1,'slug':slug}).status_code==200
     assert client.get('/shop/'+slug+'/media/'+ids[1]).status_code==200
     assert client.get('/shop/'+slug+'/media/'+ids[3]).status_code==404
-    # A private draft change does not expose its image until publishing.
-    d['gallery_asset_ids']=[ids[3]]
+    # A fourth image is accepted; it is only made public after publishing.
+    d['gallery_asset_ids']=ids[1:]
     assert client.put(url+'/draft',headers=h,json={'expected_revision':2,'content':d}).status_code==200
     assert client.get('/shop/'+slug+'/media/'+ids[3]).status_code==404
+    assert client.post(url+'/publish',headers=h,json={'expected_revision':3,'slug':slug}).status_code==200
+    html=client.get('/shop/'+slug).text
+    assert html.count('<img ')==4
+    import re
+    assert re.search(r'id="description".*?data-gallery-slot="1".*?</section>',html)
+    assert re.search(r'id="services".*?data-gallery-slot="2".*?</section>',html)
+    assert re.search(r'class="visual-story"[^>]*>.*?data-gallery-slot="3"',html)
+    assert client.get('/shop/'+slug+'/media/'+ids[3]).status_code==200
+    # Four supplementary images exceed the limit.
+    bad={**d,'gallery_asset_ids':ids}
+    assert client.put(url+'/draft',headers=h,json={'expected_revision':4,'content':bad}).status_code==422
+    # A private draft change does not expose its image until publishing.
+    d['gallery_asset_ids']=[ids[3]]
+    assert client.put(url+'/draft',headers=h,json={'expected_revision':4,'content':d}).status_code==200
     assert client.get('/shop/'+slug+'/media/'+ids[1]).status_code==200
     _,_,otherh,otherurl=setup(db)
     assert client.post(otherurl+'/preview',headers=otherh,json=d).status_code==422
@@ -169,7 +183,7 @@ def test_full_framework_preview_never_persists_placeholders(db,client,monkeypatc
     for code in ['generic','scenic','gallery','poster']:
         r=client.post(url+'/preview',headers=h,json={'template':code})
         assert r.status_code==200,r.text
-        for marker in ['公开封面位置','补充图片 1 位置','补充图片 2 位置','id="description"','id="services"','id="faq"','id="contact"','未填写 · 位置示意']:
+        for marker in ['公开封面位置','补充图片 1 位置','补充图片 2 位置','补充图片 3 位置','id="description"','id="services"','id="faq"','id="contact"','未填写 · 位置示意']:
             assert marker in r.text,marker
     assert client.get(url,headers=h).json()['draft']=={}
     d=content();d['show_faq']=False

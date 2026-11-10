@@ -74,19 +74,16 @@ def render_site(site,d,section='',preview=False):
     from app.services import geo_site_design
     body='<p class="notice preview-notice">完整框架预览 · 虚线区域为占位，未填写内容不会保存或发布；已关闭的模块不展示。</p>' if preview else ''
     cover_url=d.get('_preview_cover_url','') if preview else ('/shop/'+str(site.slug)+'/media/'+d['cover_asset_id'] if d.get('cover_asset_id') else '')
-    body+='<section class="site-hero"><div class="hero-copy"><p class="eyebrow">'+e(' · '.join(filter(None,[d.get('industry'),d.get('region')])))+'</p><h1>'+e(name)+'</h1><p class="muted">企业提供并确认 · '+e(str(site.published_at or '')[:10])+'</p></div>'
+    body+='<section class="site-hero"><div class="hero-copy"><p class="eyebrow">'+e(' · '.join(filter(None,[d.get('industry'),d.get('region')])))+'</p><h1>'+e(name)+'</h1><p class="muted">企业提供并确认 · '+e(str(site.published_at or '')[:10])+'</p><a class="contact-cta" href="#contact">联系咨询 <span aria-hidden="true">↗</span></a></div>'
     if cover_url:body+='<img class="cover" src="'+e(cover_url)+'" alt="'+e(name)+'公开封面">'
     elif preview:body+='<div class="cover image-placeholder" role="img" aria-label="公开封面位置"><strong>公开封面位置</strong><span>选择一张主图，在此展示企业形象</span></div>'
     body+='</section>'
     gallery=d.get('_preview_gallery_urls',[]) if preview else ['/shop/'+str(site.slug)+'/media/'+str(a) for a in d.get('gallery_asset_ids',[])]
-    if gallery or preview:
-        body+='<div class="photo-pair">'
-        for i in range(2 if preview else len(gallery)):
-            body+='<figure>'
-            if i<len(gallery):body+='<img src="'+e(gallery[i])+'" alt="'+e(name)+'展示图片 '+str(i+1)+'" loading="lazy">'
-            else:body+='<div class="image-placeholder gallery-placeholder" role="img" aria-label="补充图片 '+str(i+1)+' 位置"><strong>补充图片 '+str(i+1)+' 位置</strong><span>展示产品、服务或企业环境</span></div>'
-            body+='</figure>'
-        body+='</div>'
+    def gallery_image(i):
+        if i>=len(gallery) and not preview:return ''
+        image='<img src="'+e(gallery[i])+'" alt="'+e(name)+'展示图片 '+str(i+1)+'" loading="lazy" decoding="async">' if i<len(gallery) else '<div class="image-placeholder gallery-placeholder" role="img" aria-label="补充图片 '+str(i+1)+' 位置"><strong>补充图片 '+str(i+1)+' 位置</strong><span>'+['配合企业介绍','配合产品与服务','补充细节或使用场景'][i]+(' · 推荐补齐' if i==2 else '')+'</span></div>'
+        return '<figure class="section-photo" data-gallery-slot="'+str(i+1)+'">'+image+'</figure>'
+    rendered_photos=set()
     labels={'description':config.get('intro','企业介绍'),'services':config.get('services','产品与服务'),'faq':config.get('faq','常见问题')}
     for key in d.get('module_order',['description','services','faq']):
         label=labels[key]
@@ -102,7 +99,13 @@ def render_site(site,d,section='',preview=False):
             else:
                 hints={'description':'企业介绍将在这里展示：介绍企业实际提供的价值与特点。','services':'产品与服务将在这里按条目展示：名称、内容与适用条件。','faq':'常见问题将在这里逐项展示：客户的问题与已确认的回答。'}
                 content='<div class="content-placeholder"><strong>未填写 · 位置示意</strong><p>'+hints[key]+'</p></div>'
-            body+='<section class="section" id="'+key+'"><h2>'+e(label)+'</h2><div class="module-content">'+content+'</div></section>'
+            slot={'description':0,'services':1}.get(key)
+            photo=gallery_image(slot) if slot is not None else ''
+            if photo:rendered_photos.add(slot)
+            body+='<section class="section" id="'+key+'"><h2>'+e(label)+'</h2><div class="module-content"><div class="module-copy">'+content+'</div>'+photo+'</div></section>'
+
+    remaining=[gallery_image(i) for i in range(3 if preview else len(gallery)) if i not in rendered_photos]
+    if any(remaining):body+='<section class="visual-story" aria-label="企业展示图片">'+''.join(remaining)+'</section>'
 
     if d.get('facts'):
         body+='<section><h2>资质、承诺与有效期</h2>'+''.join('<p><strong>'+e(f['key'])+'：</strong>'+(e(f['value']) if not f.get('valid_until') or f['valid_until']>=datetime.now(timezone.utc).date().isoformat() else '资料已过期，等待企业更新')+'<br><small>来源：'+e(f['source'])+(' · 有效期至 '+e(f['valid_until']) if f.get('valid_until') else '')+'</small></p>' for f in d['facts'])+'</section>'

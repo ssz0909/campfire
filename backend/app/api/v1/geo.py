@@ -44,7 +44,7 @@ class Content(BaseModel):
     faq_items: list[FAQItem] | None = Field(None, max_length=20)
     template: str = Field('generic',max_length=64)
     cover_asset_id: str = Field("",max_length=36)
-    gallery_asset_ids: list[uuid.UUID] = Field(default_factory=list,max_length=2)
+    gallery_asset_ids: list[uuid.UUID] = Field(default_factory=list,max_length=3)
     brand_color: str = Field('#c05929',pattern=r'^#[0-9a-fA-F]{6}$')
     module_order: list[Literal['description','services','faq']] = Field(default_factory=lambda:['description','services','faq'],min_length=3,max_length=3)
     show_services: bool = True
