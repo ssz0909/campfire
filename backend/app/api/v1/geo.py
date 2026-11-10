@@ -86,7 +86,7 @@ class TemplateData(BaseModel):
     intro: str = Field('企业介绍',max_length=60)
     services: str = Field('产品与服务',max_length=60)
     faq: str = Field('常见问题',max_length=60)
-    layout: Literal['classic','editorial','poster'] = 'classic'
+    layout: Literal['classic','scenic','editorial','poster'] = 'classic'
     accent: str = Field('#c05929',pattern=r'^#[0-9a-fA-F]{6}$')
 
 @router.get('/companies/{company_id}/geo')

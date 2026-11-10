@@ -55,6 +55,16 @@ def test_owner_publish_search_preview_and_admin(db,client,monkeypatch,tmp_path):
         page.get_by_role('button',name='＋ 添加问答',exact=True).click()
         page.get_by_label('问题',exact=True).fill('如何咨询？')
         page.get_by_label('回答',exact=True).fill('通过本页公开联系方式咨询。')
+        # Verify distinct styling even before any image is configured.
+        for code,expected in [('generic','classic'),('travel','scenic'),('gallery','editorial')]:
+            page.locator('input[name="template"][value="'+code+'"]').check()
+            page.get_by_role('button',name='预览草稿',exact=True).click()
+            frame=page.frame_locator('iframe')
+            expect(frame.locator('body')).to_have_class('layout-'+expected)
+            if expected=='scenic':assert frame.locator('.site-hero').evaluate('(el)=>getComputedStyle(el).textAlign')=='center'
+            if expected=='editorial':assert frame.locator('.site-hero').evaluate('(el)=>parseInt(getComputedStyle(el).borderLeftWidth)')==6
+            page.get_by_role('button',name='收起预览',exact=True).click()
+        page.locator('input[name="template"][value="generic"]').check()
         page.get_by_role('button',name='选择图片',exact=True).click()
         expect(page.get_by_role('dialog')).to_be_visible()
         page.get_by_role('button',name='预览图片：图片封面验收',exact=True).click()

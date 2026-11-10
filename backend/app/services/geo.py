@@ -16,8 +16,8 @@ from app.models.company import Company
 from app.models.audit_log import AuditLog
 
 DEFAULTS = {
- 'generic': {'intro':'企业介绍','services':'产品与服务','faq':'常见问题','accent':'#c05929'},
- 'travel': {'intro':'目的地与体验','services':'住宿与游览服务','faq':'出行与服务问答','accent':'#28766a'},
+ 'generic': {'layout':'classic','intro':'企业介绍','services':'产品与服务','faq':'常见问题','accent':'#c05929'},
+ 'travel': {'layout':'scenic','intro':'目的地与体验','services':'住宿与游览服务','faq':'出行与服务问答','accent':'#28766a'},
 }
 
 from app.services.geo_site_design import TEMPLATES
@@ -56,7 +56,7 @@ def template_snapshot(db, code):
     t=db.get(GeoTemplate,code)
     if not t and code not in DEFAULTS: raise HTTPException(422,'模板不存在')
     return {'renderer_version':1,'code':code,'revision':t.revision if t else 1,'name':t.name if t else TEMPLATES.get(code,{}).get('name',code),
-            'config':t.config if t else DEFAULTS[code]}
+            'config':{**DEFAULTS.get(code,{}),**(t.config or {})} if t else DEFAULTS[code]}
 
 def describe(site):
     if not site: return {'status':'draft','revision':0,'draft':{},'live':{},'slug':None}

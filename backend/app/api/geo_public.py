@@ -90,7 +90,7 @@ def render_site(site,d,section='',preview=False):
                 else:
                     content=''.join('<article><h3>'+e(i['question'])+'</h3><p class="facts">'+e(i['answer'])+'</p></article>' for i in items)
             else:content='<div class="facts">'+e(d[key])+'</div>'
-            body+='<section class="section" id="'+key+'"><h2>'+e(label)+'</h2>'+content+'</section>'
+            body+='<section class="section" id="'+key+'"><h2>'+e(label)+'</h2><div class="module-content">'+content+'</div></section>'
 
     if d.get('facts'):
         body+='<section><h2>资质、承诺与有效期</h2>'+''.join('<p><strong>'+e(f['key'])+'：</strong>'+(e(f['value']) if not f.get('valid_until') or f['valid_until']>=datetime.now(timezone.utc).date().isoformat() else '资料已过期，等待企业更新')+'<br><small>来源：'+e(f['source'])+(' · 有效期至 '+e(f['valid_until']) if f.get('valid_until') else '')+'</small></p>' for f in d['facts'])+'</section>'

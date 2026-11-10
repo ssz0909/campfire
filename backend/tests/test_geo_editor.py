@@ -104,7 +104,7 @@ def test_three_image_layouts_privacy_and_snapshot(db,client,monkeypatch,tmp_path
         db.add(a);db.flush();ids.append(str(a.id))
     db.commit()
     d=content();d.update(cover_asset_id=ids[0],gallery_asset_ids=ids[1:3],template='gallery')
-    for code,layout in [('generic','classic'),('gallery','editorial'),('poster','poster')]:
+    for code,layout in [('generic','classic'),('travel','scenic'),('gallery','editorial'),('poster','poster')]:
         d['template']=code
         r=client.post(url+'/preview',headers=h,json=d)
         assert r.status_code==200,r.text
@@ -139,3 +139,17 @@ def test_admin_add_layout_template(db,client):
     d=content();d['template']='new-style'
     assert 'layout-editorial' in client.post(url+'/preview',headers=h,json=d).text
     assert client.put('/api/v1/admin/geo-templates/invalid-layout',headers=h,json={'name':'无效','layout':'arbitrary-html'}).status_code==422
+
+
+def test_legacy_template_layout_defaults_and_explicit_override(db,client):
+    _,_,h,url=setup(db)
+    db.add(GeoTemplate(code='travel',name='酒旅',revision=1,config={'intro':'原有标题'}));db.commit()
+    templates=client.get(url,headers=h).json()['templates']
+    assert next(t for t in templates if t['code']=='travel')['config']['layout']=='scenic'
+    for code,layout in [('generic','classic'),('travel','scenic'),('gallery','editorial')]:
+        d=content();d['template']=code
+        r=client.post(url+'/preview',headers=h,json=d)
+        assert 'class="layout-'+layout+'"' in r.text
+        assert '安吉测试酒店' in r.text
+    row=db.get(GeoTemplate,'travel');row.config={**row.config,'layout':'poster'};db.commit()
+    assert next(t for t in client.get(url,headers=h).json()['templates'] if t['code']=='travel')['config']['layout']=='poster'
