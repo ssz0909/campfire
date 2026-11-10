@@ -64,3 +64,7 @@
 ## 模板预览差异修复（2026-11-10）
 
 源码 `bb7a2a1`，发布目录 `/opt/campfire/releases/geo-distinct-20261110T030632Z`，备份及回退脚本 `/opt/campfire/backups/before-geo-distinct-20261110T030632Z/rollback.sh`。备份包含数据库、原发布目录及Nginx配置，无数据库迁移。GEO/llms相关20项测试通过，额外浏览器验证无图的classic/scenic/editorial布局计算样式确有区别；任务矩阵电脑/手机回归通过。公网入口及GeoView产物校验一致，现网生效配置确认通用classic、酒旅scenic、画册editorial，旧数据库缺失layout已由默认配置补齐，显式自定义布局保留。
+
+## 完整模板预览与三图发布门槛（2026-11-10）
+
+源码 `5ff539d`；发布目录 `/opt/campfire/releases/geo-framework-20261110T032211Z`，备份与回退脚本 `/opt/campfire/backups/before-geo-framework-20261110T032211Z/rollback.sh`，含数据库、原发布目录和Nginx备份，无数据库迁移。21项GEO/llms/浏览器测试通过，含无资料全框架占位、图片位置、占位不持久化、缺图/重复图发布拒绝、大窗口预览；矩阵任务电脑手机回归通过。线上前端入口与GeoView产物SHA256一致，健康检查正常。旧公开快照保留，再发布需三张不同图片。
