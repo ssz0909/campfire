@@ -21,6 +21,9 @@ def test_owner_publish_search_preview_and_admin(db,client,monkeypatch,tmp_path):
     Image.open(Path(__file__).resolve().parents[1]/'app/public_media/hospitality.webp').resize((320,200)).save(tmp_path/'cover.png')
     asset=Asset(company_id=company.id,uploaded_by=user.id,name='图片封面验收',original_filename='cover.png',file_key='cover.png',file_url='/files/cover.png',asset_type='image',mime_type='image/png',file_size_bytes=500,processing_status='ready')
     db.add(asset);db.commit()
+    for i in (1,2):
+        db.add(Asset(company_id=company.id,uploaded_by=user.id,name=f'展示验收{i}',original_filename=f'extra{i}.png',file_key='cover.png',file_url='/files/cover.png',asset_type='image',mime_type='image/png',file_size_bytes=500,processing_status='ready'))
+    db.commit()
     from app.services import geo_writing
     async def suggestions(db,content):
         return {'description':'企业的真实产品和服务介绍，只用于隔离测试。','service_items':[{'name':'AI建议服务','description':'供用户核对的建议。'}],'faq_items':[]}
@@ -62,7 +65,10 @@ def test_owner_publish_search_preview_and_admin(db,client,monkeypatch,tmp_path):
             frame=page.frame_locator('iframe')
             expect(frame.locator('body')).to_have_class('layout-'+expected)
             if expected=='scenic':assert frame.locator('.site-hero').evaluate('(el)=>getComputedStyle(el).textAlign')=='center'
-            if expected=='editorial':assert frame.locator('.site-hero').evaluate('(el)=>parseInt(getComputedStyle(el).borderLeftWidth)')==6
+            if expected=='editorial':assert frame.locator('.site-hero').evaluate('(el)=>getComputedStyle(el).display')=='grid'
+            expect(frame.get_by_role('img',name='公开封面位置',exact=True)).to_be_visible()
+            expect(frame.get_by_role('img',name='补充图片 2 位置',exact=True)).to_have_count(1)
+            assert page.get_by_role('dialog').bounding_box()['width']>1200
             page.get_by_role('button',name='收起预览',exact=True).click()
         page.locator('input[name="template"][value="generic"]').check()
         page.get_by_role('button',name='选择图片',exact=True).click()
@@ -74,7 +80,9 @@ def test_owner_publish_search_preview_and_admin(db,client,monkeypatch,tmp_path):
         assert page.get_by_label('企业介绍',exact=True).evaluate('(el)=>getComputedStyle(el).resize')=='none'
         assert page.get_by_role('button',name='AI整理文案',exact=True).bounding_box()['y']>page.get_by_label('产品或服务说明',exact=True).bounding_box()['y']
         page.get_by_role('button',name='添加展示图片',exact=True).click()
-        page.get_by_role('button',name='添加展示图片',exact=True).last.click()
+        page.get_by_role('dialog').locator('article').filter(has_text='展示验收1').get_by_role('button',name='添加展示图片',exact=True).click()
+        page.get_by_role('button',name='添加展示图片',exact=True).click()
+        page.get_by_role('dialog').locator('article').filter(has_text='展示验收2').get_by_role('button',name='添加展示图片',exact=True).click()
         page.get_by_role('button',name='AI整理文案',exact=True).click()
         expect(page.get_by_role('dialog')).to_be_visible()
         expect(page.get_by_role('dialog').get_by_text('AI建议服务',exact=True)).to_be_visible()
@@ -101,6 +109,7 @@ def test_owner_publish_search_preview_and_admin(db,client,monkeypatch,tmp_path):
         page.get_by_role('button',name='预览草稿',exact=True).click()
         expect(page.get_by_title('企业主页草稿预览')).to_be_visible()
         expect(page.frame_locator('iframe').get_by_role('heading',name='浏览器验收企业',exact=True)).to_be_visible()
+        page.get_by_role('button',name='收起预览',exact=True).click()
         page.on('dialog',lambda d:d.accept())
         page.get_by_role('button',name='发布主页',exact=True).click()
         expect(page.get_by_role('status')).to_have_text('主页发布成功，已进入站内搜索')

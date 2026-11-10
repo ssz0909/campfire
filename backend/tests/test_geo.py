@@ -13,10 +13,20 @@ def content(name='安吉测试酒店'):
     return {'name':name,'description':'安吉真实企业服务介绍','region':'浙江 湖州 安吉','industry':'酒旅 住宿','services':'亲子客房 停车场','contact':'请通过酒店官方渠道咨询','confirmed':True}
 
 
+def image_content(db,company,user):
+    from app.models.asset import Asset
+    ids=[]
+    for i in range(3):
+        a=Asset(company_id=company.id,uploaded_by=user.id,name=f'发布测试图{i}',original_filename=f'{i}.png',file_key=f'geo-test/{company.id}/{i}.png',asset_type='image',mime_type='image/png',file_size_bytes=100,processing_status='ready')
+        db.add(a);db.flush();ids.append(str(a.id))
+    db.commit()
+    return {'cover_asset_id':ids[0],'gallery_asset_ids':ids[1:]}
+
+
 def published(db,client,monkeypatch):
     monkeypatch.setattr(geo,'index_site',lambda *args:None)
     user,company,h,url=setup(db)
-    r=client.put(url+'/draft',headers=h,json={'expected_revision':0,'content':content()})
+    r=client.put(url+'/draft',headers=h,json={'expected_revision':0,'content':{**content(),**image_content(db,company,user)}})
     assert r.status_code==200,r.text
     slug='test-'+uuid.uuid4().hex[:12]
     r=client.post(url+'/publish',headers=h,json={'expected_revision':1,'slug':slug})
@@ -55,7 +65,7 @@ def test_snapshot_search_withdraw(db,client,monkeypatch):
 def test_duplicate_slug_and_admin_alias(db,client,monkeypatch):
     u,c,h,url,slug,site=published(db,client,monkeypatch)
     u2,c2,h2,url2=setup(db)
-    client.put(url2+'/draft',headers=h2,json={'expected_revision':0,'content':content()})
+    client.put(url2+'/draft',headers=h2,json={'expected_revision':0,'content':{**content(),**image_content(db,c2,u2)}})
     assert client.post(url2+'/publish',headers=h2,json={'expected_revision':1,'slug':slug}).status_code==409
     admin=create_test_user(db,email='admin-'+uuid.uuid4().hex+'@example.com',is_platform_admin=True)
     ah=auth_headers(admin);new='renamed-'+uuid.uuid4().hex[:10]
@@ -88,7 +98,7 @@ def test_stale_version_validation_xss(db,client,monkeypatch):
     assert client.put(url+'/draft',headers=h,json={'expected_revision':0,'content':{'name':'x'}}).status_code==200
     assert client.post(url+'/publish',headers=h,json={'expected_revision':1,'slug':'valid-slug'}).status_code==422
     assert client.put(url+'/draft',headers=h,json={'expected_revision':0,'content':content()}).status_code==409
-    assert client.put(url+'/draft',headers=h,json={'expected_revision':1,'content':content('<script>alert(1)</script>')}).status_code==200
+    assert client.put(url+'/draft',headers=h,json={'expected_revision':1,'content':{**content('<script>alert(1)</script>'),**image_content(db,c,u)}}).status_code==200
     monkeypatch.setattr(geo,'index_site',lambda *args:None)
     assert client.post(url+'/publish',headers=h,json={'expected_revision':2,'slug':'safe-page'}).status_code==200
     assert '<script>alert(1)</script>' not in client.get('/shop/safe-page').text
@@ -115,7 +125,7 @@ def test_public_pages(client):
 
 def test_facts_module_checks_feedback_and_admin_totals(db,client,monkeypatch):
     u,c,h,url=setup(db)
-    d=content();d.update(facts=[{'key':'营业时间','value':'9:00—18:00','source':'企业确认','status':'pending'}],show_services=False,brand_color='#123456')
+    d=content();d.update(image_content(db,c,u));d.update(facts=[{'key':'营业时间','value':'9:00—18:00','source':'企业确认','status':'pending'}],show_services=False,brand_color='#123456')
     assert client.put(url+'/draft',headers=h,json={'expected_revision':0,'content':d}).status_code==200
     assert client.post(url+'/publish',headers=h,json={'expected_revision':1,'slug':'fact-example'}).status_code==422
     d['facts'][0]['status']='confirmed';d['facts'][0]['valid_until']='2000-01-01'

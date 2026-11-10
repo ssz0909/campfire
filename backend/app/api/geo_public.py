@@ -69,32 +69,44 @@ def public_site(db,slug):
     return site
 
 def render_site(site,d,section='',preview=False):
-    name=d.get('name','');config=d.get('template_snapshot',{}).get('config',geo.DEFAULTS['generic'])
+    d=dict(d)
+    name=d.get('name','') or ('企业名称（占位）' if preview else '');config=d.get('template_snapshot',{}).get('config',geo.DEFAULTS['generic'])
     from app.services import geo_site_design
-    body='<p class="notice">草稿预览 · 尚未发布</p>' if preview else ''
+    body='<p class="notice preview-notice">完整框架预览 · 虚线区域为占位，未填写内容不会保存或发布；已关闭的模块不展示。</p>' if preview else ''
     cover_url=d.get('_preview_cover_url','') if preview else ('/shop/'+str(site.slug)+'/media/'+d['cover_asset_id'] if d.get('cover_asset_id') else '')
     body+='<section class="site-hero"><div class="hero-copy"><p class="eyebrow">'+e(' · '.join(filter(None,[d.get('industry'),d.get('region')])))+'</p><h1>'+e(name)+'</h1><p class="muted">企业提供并确认 · '+e(str(site.published_at or '')[:10])+'</p></div>'
     if cover_url:body+='<img class="cover" src="'+e(cover_url)+'" alt="'+e(name)+'公开封面">'
+    elif preview:body+='<div class="cover image-placeholder" role="img" aria-label="公开封面位置"><strong>公开封面位置</strong><span>选择一张主图，在此展示企业形象</span></div>'
     body+='</section>'
     gallery=d.get('_preview_gallery_urls',[]) if preview else ['/shop/'+str(site.slug)+'/media/'+str(a) for a in d.get('gallery_asset_ids',[])]
-    if gallery:body+='<div class="photo-pair">'+''.join('<figure><img src="'+e(url)+'" alt="'+e(name)+'展示图片 '+str(i+1)+'" loading="lazy"></figure>' for i,url in enumerate(gallery))+'</div>'
+    if gallery or preview:
+        body+='<div class="photo-pair">'
+        for i in range(2 if preview else len(gallery)):
+            body+='<figure>'
+            if i<len(gallery):body+='<img src="'+e(gallery[i])+'" alt="'+e(name)+'展示图片 '+str(i+1)+'" loading="lazy">'
+            else:body+='<div class="image-placeholder gallery-placeholder" role="img" aria-label="补充图片 '+str(i+1)+' 位置"><strong>补充图片 '+str(i+1)+' 位置</strong><span>展示产品、服务或企业环境</span></div>'
+            body+='</figure>'
+        body+='</div>'
     labels={'description':config.get('intro','企业介绍'),'services':config.get('services','产品与服务'),'faq':config.get('faq','常见问题')}
     for key in d.get('module_order',['description','services','faq']):
         label=labels[key]
         if key in ('services','faq') and not d.get('show_'+key,True):continue
-        if d.get(key) and (not section or key==section):
+        if (d.get(key) or preview) and (not section or key==section):
             items=d.get('service_items' if key=='services' else 'faq_items') if key!='description' else None
             if items:
                 if key=='services':
                     content='<div class="grid">'+''.join('<article class="card"><h3>'+e(i['name'])+'</h3><p>'+e(i['description'])+'</p></article>' for i in items)+'</div>'
                 else:
                     content=''.join('<article><h3>'+e(i['question'])+'</h3><p class="facts">'+e(i['answer'])+'</p></article>' for i in items)
-            else:content='<div class="facts">'+e(d[key])+'</div>'
+            elif d.get(key):content='<div class="facts">'+e(d[key])+'</div>'
+            else:
+                hints={'description':'企业介绍将在这里展示：介绍企业实际提供的价值与特点。','services':'产品与服务将在这里按条目展示：名称、内容与适用条件。','faq':'常见问题将在这里逐项展示：客户的问题与已确认的回答。'}
+                content='<div class="content-placeholder"><strong>未填写 · 位置示意</strong><p>'+hints[key]+'</p></div>'
             body+='<section class="section" id="'+key+'"><h2>'+e(label)+'</h2><div class="module-content">'+content+'</div></section>'
 
     if d.get('facts'):
         body+='<section><h2>资质、承诺与有效期</h2>'+''.join('<p><strong>'+e(f['key'])+'：</strong>'+(e(f['value']) if not f.get('valid_until') or f['valid_until']>=datetime.now(timezone.utc).date().isoformat() else '资料已过期，等待企业更新')+'<br><small>来源：'+e(f['source'])+(' · 有效期至 '+e(f['valid_until']) if f.get('valid_until') else '')+'</small></p>' for f in d['facts'])+'</section>'
-    body+='<section class="contact" id="contact"><h2>位置与联系</h2><p class="facts">'+e(d.get('address'))+'</p><details data-contact><summary>查看联系信息</summary><p class="facts">'+e(d.get('contact'))+'</p></details></section><p class="notice">信息由该企业维护；服务与价格请联系企业确认。如有错误，可通过联系信息向企业反馈，或联系营火平台管理员核实。</p>'
+    body+='<section class="contact" id="contact"><h2>位置与联系</h2><p class="facts">'+e(d.get('address') or ('公开地址（占位）' if preview else ''))+'</p><details data-contact'+(' open' if preview else '')+'><summary>查看联系信息</summary><p class="facts">'+e(d.get('contact') or ('公开联系信息将在这里展示（占位）' if preview else ''))+'</p></details></section><p class="notice">信息由该企业维护；服务与价格请联系企业确认。如有错误，可通过联系信息向企业反馈，或联系营火平台管理员核实。</p>'
     if not preview:
         if d.get('services') and d.get('show_services',True):body+='<a href="/shop/'+e(site.slug)+'/services">服务详情</a> · '
         if d.get('faq') and d.get('show_faq',True):body+='<a href="/shop/'+e(site.slug)+'/faq">常见问题</a>'

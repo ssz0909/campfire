@@ -1,8 +1,9 @@
 /** The server repeats normalization; arrays remain the source of truth for new drafts. */
-export function geoPayload(form:any){
+export function geoPayload(form:any,preview=false){
   const d=JSON.parse(JSON.stringify(form))
   d.service_items=d.service_items.filter((i:any)=>i.name.trim()||i.description.trim())
   d.faq_items=d.faq_items.filter((i:any)=>i.question.trim()||i.answer.trim())
+  if(preview){d.service_items=d.service_items.filter((i:any)=>i.name.trim()&&i.description.trim());d.faq_items=d.faq_items.filter((i:any)=>i.question.trim()&&i.answer.trim());d.facts=d.facts.filter((i:any)=>i.key.trim()&&i.value.trim()&&i.source.trim())}
   if(d.service_items.some((i:any)=>!i.name.trim()||!i.description.trim()))throw new Error('请为每条服务填写名称和说明，或删除未完成的条目')
   if(d.faq_items.some((i:any)=>!i.question.trim()||!i.answer.trim()))throw new Error('请为每条问答填写问题和回答，或删除未完成的条目')
   d.services=d.service_items.map((i:any)=>i.name+'：'+i.description).join('\n\n')

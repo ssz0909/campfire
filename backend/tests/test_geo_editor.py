@@ -1,14 +1,14 @@
 import json
-from tests.test_geo import setup, content
+from tests.test_geo import setup, content, image_content
 from app.services import geo
 from app.models.geo import GeoTemplate
 from app.providers.llm.openai_provider import OpenAIProvider
 
 
 def test_structured_publish_search_llms_and_clear(db,client,monkeypatch):
-    _,company,h,url=setup(db)
+    user,company,h,url=setup(db)
     monkeypatch.setattr(geo,'index_site',lambda *args:None)
-    d=content();d.update(service_items=[{'name':'定制体验','description':'仅接受事先咨询预约'}],faq_items=[{'question':'如何预约？','answer':'请通过官方渠道咨询。'}])
+    d=content();d.update(image_content(db,company,user));d.update(service_items=[{'name':'定制体验','description':'仅接受事先咨询预约'}],faq_items=[{'question':'如何预约？','answer':'请通过官方渠道咨询。'}])
     r=client.put(url+'/draft',headers=h,json={'expected_revision':0,'content':d})
     assert r.status_code==200,r.text
     assert r.json()['draft']['services']=='定制体验：仅接受事先咨询预约'
@@ -153,3 +153,29 @@ def test_legacy_template_layout_defaults_and_explicit_override(db,client):
         assert '安吉测试酒店' in r.text
     row=db.get(GeoTemplate,'travel');row.config={**row.config,'layout':'poster'};db.commit()
     assert next(t for t in client.get(url,headers=h).json()['templates'] if t['code']=='travel')['config']['layout']=='poster'
+
+
+def test_full_framework_preview_never_persists_placeholders(db,client,monkeypatch):
+    user,company,h,url=setup(db)
+    monkeypatch.setattr(geo,'index_site',lambda *a:None)
+    for code in ['generic','travel','gallery','poster']:
+        r=client.post(url+'/preview',headers=h,json={'template':code})
+        assert r.status_code==200,r.text
+        for marker in ['公开封面位置','补充图片 1 位置','补充图片 2 位置','id="description"','id="services"','id="faq"','id="contact"','未填写 · 位置示意']:
+            assert marker in r.text,marker
+    assert client.get(url,headers=h).json()['draft']=={}
+    d=content();d['show_faq']=False
+    assert 'id="faq"' not in client.post(url+'/preview',headers=h,json=d).text
+    # Drafts can be saved without images; publication enforces three distinct images.
+    assert client.put(url+'/draft',headers=h,json={'expected_revision':0,'content':d}).status_code==200
+    r=client.post(url+'/publish',headers=h,json={'expected_revision':1,'slug':'framework-test'})
+    assert r.status_code==422 and '公开封面' in r.text and '补充展示图片' in r.text
+    images=image_content(db,company,user);d.update(images)
+    d['gallery_asset_ids']=[d['cover_asset_id'],d['gallery_asset_ids'][0]]
+    assert client.put(url+'/draft',headers=h,json={'expected_revision':1,'content':d}).status_code==200
+    assert client.post(url+'/publish',headers=h,json={'expected_revision':2,'slug':'framework-test'}).status_code==422
+    d.update(images)
+    assert client.put(url+'/draft',headers=h,json={'expected_revision':2,'content':d}).status_code==200
+    assert client.post(url+'/publish',headers=h,json={'expected_revision':3,'slug':'framework-test'}).status_code==200
+    public=client.get('/shop/framework-test').text
+    assert '位置示意' not in public and '公开封面位置' not in public

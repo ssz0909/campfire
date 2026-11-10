@@ -20,7 +20,7 @@ def test_llms_live_lifecycle_and_alias(db, client, monkeypatch):
     assert '亲子客房 停车场' in document.text
     assert '请通过酒店官方渠道咨询' in document.text
     assert 'application/ld+json' not in document.text
-    changed = content('更新后企业')
+    changed = {**site['live'],'name':'更新后企业'}
     assert client.put(url+'/draft', headers=headers, json={'expected_revision': 2, 'content': changed}).status_code == 200
     assert '更新后企业' not in client.get('/llms.txt').text
     assert '更新后企业' not in client.get(f'/shop/{slug}/llms.txt').text
