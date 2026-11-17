@@ -31,6 +31,7 @@ def shot_contract(project, shot):
         'closing_frame': shot.get('closing_frame', ''),
         'retained_duration': shot.get('duration_seconds'),
         'subshots': shot.get('subshots') or [],
+        'human_motion_policy':shot.get('human_motion_policy'),
     }
 
 
@@ -107,7 +108,7 @@ def compatible(project, shot, asset):
                   'framing', 'focal_x', 'focal_y', 'camera_movement',
                   'transition_in', 'transition_out', 'video_style',
                   'visual_description', 'generation_prompt', 'opening_frame', 'closing_frame',
-                  'retained_duration', 'subshots')
+                  'retained_duration', 'subshots', 'human_motion_policy')
     if any(contract.get(key) != target.get(key) for key in match_keys):
         return False
     return float(asset.duration_seconds or 0) >= float(shot['duration_seconds']) - 0.01

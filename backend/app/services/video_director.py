@@ -31,6 +31,9 @@ video_script逐镜标注转场类型、时长及衔接画面，明确是生成�
 模型可能最少生成5秒，但成片只剪取每镜需要的短片段，不把模型生成时长当作成片镜头时长。'''
 
 
+from app.services.video_motion import DIRECTOR_MOTION_RULES
+DIRECTOR_PROMPT += DIRECTOR_MOTION_RULES
+
 class DirectorShot(BaseModel):
     source_asset_id: str
     duration_seconds: float = Field(ge=1.5, le=3.5, allow_inf_nan=False)
@@ -132,10 +135,12 @@ def fallback_plan(assets, duration=30):
         asset = assets[i]
         framing = ('wide', 'medium', 'detail')[(i + i//len(assets)) % 3]
         movement = ('固定机位，环境自然动态', '轻微侧移', '缓慢拉远')[i % 3]
+        from app.services.video_motion import people_visible, motion_prompt
+        if people_visible(asset):movement='固定机位或轻微跟随，人物主动动作优先'
         description = asset.get('description') or asset.get('name') or '参考图中的真实主体与场景'
         plan.append(dict(source_asset_id=str(asset['id']), duration_seconds=2 if i == 0 else round(remaining/(count-1), 3),
             purpose='开场钩子' if i == 0 else '主题或品牌记忆点与咨询引导' if i == count-1 else '体验与细节',
             framing=framing, camera_movement=movement, visual_description=description,
-            generation_prompt=f'单个连续镜头：{description}。{movement}，保持参考图中的空间、建筑直线和真实光线；不添加新人物或设施。'))
+            generation_prompt=f'单个连续镜头：{description}。{movement}，保持参考图中的空间、建筑直线和真实光线；不添加新人物或设施。'+motion_prompt(asset,2 if i==0 else remaining/(count-1),i)))
     plan[-1]['duration_seconds'] += duration - sum(s['duration_seconds'] for s in plan)
     return validate_plan(plan, assets, duration)

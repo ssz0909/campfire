@@ -59,6 +59,8 @@ def test_director_cover_crop_uses_image_not_blurred_padding():
 def test_directed_generation_uses_individual_prompts_and_edit_lengths(db,monkeypatch,tmp_path):
     user=create_test_user(db);company=create_test_company(db,user)
     assets=[make_asset(db,company,user,f'场景{i}','landscape',[],f'可见景观{i}') for i in range(6)]
+    assets[0].asset_metadata={'vision_analysis':{'people_visible':True,'visual_description':'女士站在庭院'}}
+    db.commit()
     descriptors=[{'id':str(a.id),'description':a.source_description} for a in assets]
     plan=fallback_plan(descriptors,15)
     plan[0].update(transition_out='fade', transition_duration_seconds=0.3,
@@ -98,6 +100,9 @@ def test_directed_generation_uses_individual_prompts_and_edit_lengths(db,monkeyp
     assert len(calls)==len(plan)
     assert all(r.duration_seconds==5 and 'WHOLE_SCRIPT_MUST_NOT_LEAK' not in r.prompt for r in calls)
     assert all(r.audio is False for r in calls)
+    assert '人物必须主动运动' in calls[0].prompt
+    assert '当前参考素材已识别到人物' in calls[0].prompt
+    assert project.storyboard[0]['human_motion_policy']=='human-action-v1'
     assert '完成短淡出' in calls[0].prompt
     assert '本镜从起始即完成短淡入' in calls[1].prompt
     assert soundtrack.call_count==1

@@ -92,6 +92,7 @@ def test_cost_generation_submits_three_five_second_clips(db,monkeypatch,tmp_path
     assert generate.call_count==3
     requests=[call.args[3] for call in generate.call_args_list]
     assert all(r.duration_seconds==5 for r in requests)
+    assert all('人物动作执行要求' in r.prompt for r in requests)
     assert all('0至2秒' in r.prompt and '2至5秒' in r.prompt for r in requests)
     assert len({r.prompt for r in requests})==3
     assert assemble.call_args.args[2]==[5,5,5]

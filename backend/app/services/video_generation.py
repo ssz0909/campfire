@@ -91,6 +91,8 @@ def _compose_selected_images(db, project, selected_ids):
         {**s, 'shot_number':i, **({'reused_asset_id':pins[i]} if pins.get(i) else {})}
         for i,s in enumerate(plan, 1)
     ]
+    from app.services.video_motion import people_visible, MOTION_VERSION
+    project.storyboard = [{**s, **({'human_motion_policy':MOTION_VERSION} if people_visible(by_id[uuid.UUID(s['source_asset_id'])]) else {})} for s in project.storyboard]
     plan = plan_reuse(db, project, storage)
     project.storyboard = plan
     db.commit()
@@ -117,6 +119,8 @@ def _compose_selected_images(db, project, selected_ids):
             prompt = (f'{project.script or project.marketing_goal or project.title}\n'
                       f'现在只生成第{number}个动态镜头：{description}。保持参考图中的真实主体与场景，'
                       f'统一{project.aspect_ratio}构图。自然缓慢推进或横移，不得生成照片轮播或虚构设施。{industry_guidance}')
+        from app.services.video_motion import motion_prompt
+        prompt += motion_prompt(asset, clip_duration, number-1)
         if shot.get('reused_asset_id'):
             clip, reused_asset = read_reused_clip(db, project, shot, storage)
             record_use(db, project, reused_asset)
@@ -334,6 +338,11 @@ def run(project_id):
         prompt += (f'\n必须生成真正连续运动的视频，不得做图片轮播、幻灯片或静态画面拼接。'
                    f'画面比例严格为 {project.aspect_ratio}，所有主体保持完整，禁止横竖屏混排、拉伸和黑边。'
                    '如提供首帧参考图，保持其真实主体与场景，添加自然镜头运动及可见主体的合理动态，不虚构素材之外的人物或设施；未提供参考图时按用户脚本和主题生成。')
+        from app.services.video_motion import motion_prompt
+        reference_asset = next((a for a in selected if a.id==project.reference_asset_id),None)
+        if reference_asset is None and project.reference_asset_id:
+            reference_asset=db.query(Asset).filter_by(id=project.reference_asset_id,company_id=project.company_id,is_deleted=False).first()
+        prompt += motion_prompt(reference_asset,project.target_duration_seconds or 5)
         request = VideoGenerationRequest(prompt=prompt,duration_seconds=project.target_duration_seconds or 5,
             aspect_ratio=project.aspect_ratio,style=project.video_style,
             reference_image_url=reference_url(db, project), resolution=settings.VIDEO_RESOLUTION, audio=model_audio_enabled(project))

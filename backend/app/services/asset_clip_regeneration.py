@@ -115,11 +115,15 @@ def generate(db, project):
     from app.services.industry_templates import project_snapshot, visual_guidance
     from app.config import settings
     shot = deepcopy(project.storyboard[0])
-    reference(db, db.get(Asset, project.reference_asset_id))
+    source = reference(db, db.get(Asset, project.reference_asset_id))
     prompt = (f"{shot['generation_prompt']}\n参考图片已识别的事实：{shot['visual_description']}。"
         f'生成5秒真实连续动态视频，{project.aspect_ratio}构图；只展示参考图中的主体与场景，'
         '保持建筑、人物和环境结构稳定，不新增未提供的人物或设施，不做照片轮播，'
         '不生成字幕、品牌、配乐或水印。' + visual_guidance(project_snapshot(db, project)))
+    from app.services.video_motion import motion_prompt, people_visible, MOTION_VERSION
+    prompt += motion_prompt(source,5)
+    if people_visible(source):shot['human_motion_policy']=MOTION_VERSION
+    project.storyboard=[shot]
     request = VideoGenerationRequest(prompt=prompt, duration_seconds=5,
         aspect_ratio=project.aspect_ratio, style=project.video_style,
         reference_image_url=reference_url(db, project, project.reference_asset_id, shot=shot),

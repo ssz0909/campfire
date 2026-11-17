@@ -21,6 +21,9 @@ framing仅wide/medium/detail，focal_x和focal_y为0至1的裁切中心；保证
 video_script使用字符串逐段描述时间轴及内部镜头，不要求模型生成文字、品牌或字幕，不虚构人物、设施和优惠。'''
 
 
+from app.services.video_motion import DIRECTOR_MOTION_RULES
+COST_DIRECTOR_PROMPT += DIRECTOR_MOTION_RULES
+
 class CostSubshot(BaseModel):
     duration_seconds: float = Field(gt=0, le=5, allow_inf_nan=False)
     description: str = Field(min_length=1, max_length=2000)
@@ -52,6 +55,8 @@ def cost_plan(assets, duration=30):
         views = ([{'duration_seconds': 2, 'description': f'展示{description}的整体构图，克制侧移'},
                   {'duration_seconds': seconds - 2, 'description': '切换至同一场景中已可见主体的中景或细节，保持空间和光线一致'}]
                  if seconds >= 4 else [{'duration_seconds': seconds, 'description': f'{description}，自然连续运镜'}])
+        from app.services.video_motion import motion_prompt
+        views[0]['description']+=motion_prompt(asset,seconds,index)
         plan.append({'planning_version': 3, 'shot_number': index + 1, 'generation_duration_seconds': 5,
             'duration_seconds': seconds, 'source_asset_id': str(asset['id']), 'framing': 'wide',
             'focal_x': 0.5, 'focal_y': 0.5, 'purpose': '主题内容展开', 'camera_movement': '轻侧移后切同场景细节',

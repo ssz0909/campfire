@@ -93,7 +93,7 @@ class OperationsWorkflow:
             selected_assets=select_assets_for_video(db,company_id,goal,template=template,
                 limit=pool_limit,rotation_key=str(task.id),exclude_task_id=task.id)
             sources['selected_assets']=[{'id':str(a.id),'name':a.name,'category':a.category,'tags':a.tags or [],
-                'width':a.width,'height':a.height, 'description':((a.asset_metadata or {}).get('vision_analysis') or {}).get('visual_description') or a.source_description} for a in selected_assets]
+                'width':a.width,'height':a.height,'people_visible':((a.asset_metadata or {}).get('vision_analysis') or {}).get('people_visible'), 'description':((a.asset_metadata or {}).get('vision_analysis') or {}).get('visual_description') or a.source_description} for a in selected_assets]
             if (task.input_params or {}).get('reuse_policy', 'fresh') != 'fresh':
                 from types import SimpleNamespace
                 from app.services.video_clip_library import approved_candidates
