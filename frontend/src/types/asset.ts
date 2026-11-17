@@ -22,7 +22,7 @@ export interface Asset {
   category?: string
   source_description?: string
   metadata?: Record<string, any> & {
-    vision_analysis?: { status?: string; caption?: string; visual_description?: string; error?: string; detail?: string }
+    vision_analysis?: { status?: string; caption?: string; visual_description?: string; people_visible?: boolean; error?: string; detail?: string }
     clip_library?: { manual_variant?: boolean; prompt?: string; review_status?: 'pending' | 'approved'; usage_count?: number; regeneration?: {status?: 'running'|'completed'|'failed'; prompt?: string; error?: string; generated_asset_id?: string} }
   }
   width?: number

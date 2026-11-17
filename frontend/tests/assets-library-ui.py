@@ -30,12 +30,12 @@ async def check(browser, base, width):
         'file_key':'lake.jpg','file_url':'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=',
         'thumbnail_url':'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=',
         'processing_status':'ready','tags':['湖景'],'category':'landscape','source_description':'真实湖景',
-        'metadata':{'vision_analysis':{'status':'completed'}},'is_available':True,
+        'metadata':{'vision_analysis':{'status':'completed','people_visible':True,'visual_description':'一位游客站在湖边'}},'is_available':True,
         'created_at':'2026-11-05T00:00:00Z','updated_at':'2026-11-05T00:00:00Z'}
     clip={**image,'id':'clip-1','name':'湖景原图 · 分镜1','original_filename':'clip.mp4',
         'asset_type':'video','mime_type':'video/mp4','file_key':'clip.mp4','file_url':'data:video/mp4;base64,AAAA',
         'thumbnail_url':None,'duration_seconds':5,'source_description':'泳池边自然侧移',
-        'metadata':{'production_mode':'raw_model_clip','clip_library':{'review_status':'approved','usage_count':1,
+        'metadata':{'production_mode':'raw_model_clip','clip_library':{'review_status':'approved','usage_count':1,'prompt':'保留上次的湖边转身动作',
             'contract':{'source_asset_id':'image-1'}}}}
     submitted=[]; deleted=[]
     clips=[clip,{**clip,'id':'clip-2','name':'第二个分镜'}]
@@ -60,6 +60,16 @@ async def check(browser, base, width):
     await page.add_init_script("localStorage.setItem('refresh_token','mock');localStorage.setItem('currentCompanyId','company')")
     await page.goto(base+'/assets')
     await page.get_by_text('湖景原图',exact=True).first.wait_for()
+    await page.get_by_role('button',name='生成分镜',exact=True).click()
+    prompt_input=page.get_by_placeholder('描述希望改进的动作、镜头、节奏或画面细节')
+    default_prompt=await prompt_input.input_value()
+    assert '一位游客站在湖边' in default_prompt and '真人是动作主体' in default_prompt
+    assert await page.get_by_role('button',name='提交生成').is_enabled()
+    assert not submitted, 'Opening defaults must never start paid generation'
+    await prompt_input.fill('测试修改动作')
+    await page.get_by_role('button',name='恢复默认提示词').click()
+    assert await prompt_input.input_value()==default_prompt
+    await page.get_by_role('button',name='取消',exact=True).click()
     await page.get_by_role('button',name='预览湖景原图').click()
     assert await page.locator('.asset-preview-full').evaluate("el=>el.tagName")=='IMG'
     await page.keyboard.press('Escape')
@@ -74,6 +84,7 @@ async def check(browser, base, width):
     await page.get_by_text('分镜已删除').wait_for()
     assert len(deleted)==1
     await page.get_by_role('button',name='重新生成分镜').click()
+    assert await page.get_by_placeholder('描述希望改进的动作、镜头、节奏或画面细节').input_value()=='保留上次的湖边转身动作'
     await page.get_by_placeholder('描述希望改进的动作、镜头、节奏或画面细节').fill('人物缓慢走向泳池，镜头从全景平稳侧移到水面细节')
     await page.get_by_role('button',name='提交生成').click()
     await page.get_by_text('已提交分镜生成，完成后会显示在原图片下方').wait_for()

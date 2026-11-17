@@ -91,11 +91,13 @@
     <video v-else :src="asset.file_url" :poster="asset.thumbnail_url" controls autoplay class="asset-preview-full" />
     <p v-if="asset.source_description">{{ asset.source_description }}</p>
   </n-modal>
-  <n-modal v-model:show="showRegenerate" preset="card" title="重新生成分镜" style="width:min(560px, calc(100vw - 32px))">
+  <n-modal v-model:show="showRegenerate" preset="card" :title="regenerationTarget?.asset_type === 'image' ? '生成分镜' : '重新生成分镜'" style="width:min(560px, calc(100vw - 32px))">
     <p class="asset-card__description">会使用原图片和画幅生成新的独立5秒分镜；不会修改原片或自动加入复用库。</p>
     <n-select v-if="regenerationTarget?.asset_type === 'image'" v-model:value="regenerationAspect" :options="aspectOptions" style="margin-bottom:12px" />
     <p>提交后将调用视频模型，可能产生费用。生成后可预览并确认加入可复用素材。</p>
+    <p class="asset-card__description">{{ regenerationUsesHistory ? '已带入上次提示词，可直接修改后提交。' : '已根据图片信息填入默认提示词，可直接提交或调整动作与镜头。' }} 默认提示词不额外调用大模型。</p>
     <n-input v-model:value="regenerationPrompt" type="textarea" :autosize="{minRows:4,maxRows:8}" maxlength="2000" placeholder="描述希望改进的动作、镜头、节奏或画面细节" />
+    <n-button size="small" quaternary @click="resetRegenerationPrompt">恢复默认提示词</n-button>
     <p v-if="regenerationError" class="asset-card__error" role="alert">{{ regenerationError }}</p>
     <template #footer><n-button @click="showRegenerate=false">取消</n-button><n-button type="primary" :loading="regenerationBusy" :disabled="regenerationPrompt.trim().length < 4" @click="regenerateClip">提交生成</n-button></template>
   </n-modal>
@@ -124,6 +126,7 @@ import type { Asset } from '@/types/asset'
 import type { AssetType } from '@/types/asset'
 import { useAuthStore } from '@/stores/auth'
 import { assetsApi } from '@/api/assets'
+import { defaultClipPrompt, initialClipPrompt } from '@/utils/assetClipPrompt'
 
 const props = defineProps<{ asset: Asset }>()
 const emit = defineEmits<{ delete: []; edit: []; analyze: [] }>()
@@ -135,6 +138,7 @@ const aspectOptions=[{label:'竖屏 9:16',value:'9:16'},{label:'横屏 16:9',val
 const showPreview=ref(false),showRegenerate=ref(false),regenerationPrompt=ref(''),regenerationBusy=ref(false),regenerationError=ref(''),approvingId=ref(''),relatedLoading=ref(false),relatedLoaded=ref(false),showRelated=ref(false),relatedClips=ref<Asset[]>([]),relatedJobs=ref<Array<{id:string;status:string;error?:string|null}>>([]),relatedTotal=ref(0),regenerationTarget=ref<Asset|null>(null)
 let relatedTimer:ReturnType<typeof setInterval>|undefined
 const selectedClip=computed(()=>relatedClips.value[selectedIndex.value] || null)
+const regenerationUsesHistory=ref(false)
 onUnmounted(()=>{if(relatedTimer)clearInterval(relatedTimer)})
 async function loadRelated(){
   if(!auth.currentCompanyId || relatedLoading.value)return
@@ -153,7 +157,8 @@ function onRelatedVisibility(show:boolean){if(!show && relatedTimer){clearInterv
 async function changeRelatedPage(){selectedIndex.value=0;await loadRelated()}
 async function moveClip(direction:number){const next=selectedIndex.value+direction;if(next>=0 && next<relatedClips.value.length){selectedIndex.value=next;return}relatedPage.value+=direction;selectedIndex.value=direction>0?0:9;await loadRelated()}
 async function deleteClip(){if(!auth.currentCompanyId || !clipToDelete.value)return;deleteClipBusy.value=true;try{await assetsApi.delete(auth.currentCompanyId,clipToDelete.value.id);showDeleteClip.value=false;message.success('分镜已删除');if(relatedClips.value.length===1 && relatedPage.value>1){relatedPage.value--;selectedIndex.value=9}await loadRelated()}catch(e:any){message.error(e.response?.data?.detail||'删除分镜失败')}finally{deleteClipBusy.value=false}}
-function openRegenerate(clip?:Asset){regenerationTarget.value=clip||props.asset;regenerationPrompt.value=(clip?.metadata?.clip_library?.prompt||'').slice(0,2000);regenerationAspect.value='9:16';regenerationRequestId.value=crypto.randomUUID();regenerationError.value='';showRegenerate.value=true}
+function openRegenerate(clip?:Asset){regenerationTarget.value=clip||props.asset;regenerationPrompt.value=initialClipPrompt(props.asset,clip);regenerationUsesHistory.value=Boolean(clip?.metadata?.clip_library?.prompt?.trim());regenerationAspect.value='9:16';regenerationRequestId.value=crypto.randomUUID();regenerationError.value='';showRegenerate.value=true}
+function resetRegenerationPrompt(){regenerationPrompt.value=defaultClipPrompt(props.asset);regenerationUsesHistory.value=false}
 async function regenerateClip(){
   if(!auth.currentCompanyId)return
   regenerationBusy.value=true;regenerationError.value=''
