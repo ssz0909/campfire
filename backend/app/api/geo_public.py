@@ -47,8 +47,8 @@ def public_media(filename:str):
 @router.get('/',response_class=HTMLResponse)
 def home(db:Session=Depends(get_db)):
     result=geo.search(db,'',size=3)
-    body=public_design.hero()+public_design.showcase()+'<section class="home-discover" id="discover"><div class="section-head"><div><p class="section-kicker">DISCOVER WITH CAMPFIRE</p><h2>发现企业与服务</h2><p>搜索企业名称，看看它的公开主页。</p></div><a href="/search">浏览全部企业 <span aria-hidden="true">↗</span></a></div>'+form()+ '<p class="home-scope">营火站内搜索 · 依据企业已发布的公开资料匹配</p>'+cards(result)+'</section>'+public_design.benefits()
-    return page('营火AI｜AI运营平台',body,description='营火AI为小企业提供数字员工、内容制作、多账号发布、企业公开主页与效果统计。',extra=script(),head_extra=webmaster.verification_tags(db))
+    body=public_design.hero()+public_design.capabilities()+public_design.benefits()+public_design.showcase()+'<section class="home-discover" id="discover"><div class="section-head"><div><p class="section-kicker">DISCOVER WITH CAMPFIRE</p><h2>发现企业与服务</h2><p>搜索企业名称，看看它的公开主页。</p></div><a href="/search">浏览全部企业 <span aria-hidden="true">↗</span></a></div>'+form()+ '<p class="home-scope">营火站内搜索 · 依据企业已发布的公开资料匹配</p>'+cards(result)+'</section>'
+    return page('营火AI｜数字员工驱动的AI自动运营平台',body,description='设定经营目标，让数字员工持续协作：经营数据分析、经营规划与执行、视频制作与矩阵发布、企业主页与AI推荐优化。',extra=script(),head_extra=webmaster.verification_tags(db))
 
 @router.get('/search',response_class=HTMLResponse)
 def search(request:Request,q:str=Query('',max_length=120),region:str=Query('',max_length=120),industry:str=Query('',max_length=80),p:int=Query(1,ge=1,le=10000),db:Session=Depends(get_db)):

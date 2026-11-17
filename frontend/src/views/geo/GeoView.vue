@@ -1,5 +1,5 @@
 <template>
-  <div class="geo-page"><h1>GEO · 企业公开主页</h1><p>确认并发布企业信息，让客户和检索系统了解你的服务。站内搜索与外部收录分别统计。</p>
+  <div class="geo-page"><h1>AI推荐优化</h1><p>通过企业公开主页整理真实产品与服务，提供便于搜索引擎和大模型读取的信息（GEO）。站内搜索、访问与联系点击分别统计；外部收录、引用或推荐由对应平台决定。</p>
     <p v-if="error" role="alert" class="error">{{ error }}</p><p v-if="notice" role="status">{{ notice }}</p><p v-if="loading">正在加载…</p>
     <template v-if="data"><section class="panel"><h2>主页配置 <small>{{ labels[data.status] }}</small></h2>
       <p>当前版本 {{ data.revision }} · 网址在首次发布后锁定，特殊更名请联系平台管理员。</p>
