@@ -104,10 +104,10 @@ def start_generation(
 def retry_generation(
     company_id: uuid.UUID,
     pid: uuid.UUID,
-    _: User = Depends(require_permission(Permission.VIDEO_CREATE)),
+    user: User = Depends(require_permission(Permission.VIDEO_CREATE)),
     db: Session = Depends(get_db),
 ):
-    return VideoService(db).start_generation(company_id, pid, retry=True)
+    return VideoService(db).start_generation(company_id, pid, retry=True, retry_user_id=user.id)
 
 
 @router.get('/{company_id}/video-projects/{pid}/submission-recovery')

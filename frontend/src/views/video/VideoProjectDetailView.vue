@@ -72,21 +72,8 @@
       </AppCard>
       <AppCard v-if="project.status === 'failed'">
         <h2 class="section-title">失败恢复</h2>
-        <p>重新执行会复用已成功的镜头；有上游任务ID时继续查询，明确失败的镜头重新生成。新的模型请求可能产生费用。</p>
-        <p v-if="recoveryError" role="alert">{{ recoveryError }}</p>
-        <div v-for="item in recoveryItems" :key="item.attempt_id" class="recovery-item">
-          <strong>{{ item.shot_number == null ? '视频生成' : '分镜 ' + item.shot_number }} · 提交结果不确定</strong>
-          <p>提交时间：{{ item.submitted_at ? new Date(item.submitted_at).toLocaleString() : '未记录' }}。请先核对中转后台，避免重复计费。</p>
-          <n-input v-model:value="recoveryIds[item.attempt_id]" placeholder="中转后台任务 ID（关联已有任务时填写）" :disabled="actionLoading" />
-          <n-checkbox v-model:checked="recoveryConfirmed[item.attempt_id]" :disabled="actionLoading">
-            我已核对：关联时确认是本分镜的任务；重新提交时接受上次可能已受理、可能重复计费的风险。
-          </n-checkbox>
-          <div class="recovery-actions">
-            <n-button :loading="actionLoading" :disabled="!recoveryConfirmed[item.attempt_id] || !recoveryIds[item.attempt_id]?.trim()" @click="resolveRecovery(item.attempt_id, 'link')">关联上游任务</n-button>
-            <n-button type="warning" :loading="actionLoading" :disabled="!recoveryConfirmed[item.attempt_id]" @click="resolveRecovery(item.attempt_id, 'resubmit')">确认重新提交此分镜</n-button>
-          </div>
-        </div>
-        <p v-if="recoveryResolved">处理已保存。确认其他失败分镜后，点击页面上方“重新执行”继续。</p>
+        <p>点击上方“重新执行”即可继续：已完成的分镜会复用，已保存生成任务的分镜继续获取结果；没有获取到任务 ID 的分镜直接重新提交生成，无需填写任务 ID。</p>
+        <p>重新提交可能产生新的生成费用；如果上次请求已被中转受理，可能重复计费。</p>
       </AppCard>
       <AppCard v-if="project.shots?.some(s=>s.purpose)">
         <h2 class="section-title">分镜与节奏 · {{ project.target_duration_seconds }}秒</h2>
@@ -204,26 +191,6 @@ const loading = ref(true)
 const actionLoading = ref(false)
 const approvalLoading = ref(false)
 const musicLoading=ref(false),musicAssetId=ref<string|null>(null),musicVolume=ref(0.25)
-const recoveryItems=ref<{attempt_id:string;shot_number:number|null;status:string;submitted_at:string|null}[]>([])
-const recoveryIds=ref<Record<string,string>>({})
-const recoveryConfirmed=ref<Record<string,boolean>>({})
-const recoveryError=ref(''),recoveryResolved=ref(false)
-async function loadRecovery() {
-  if(project.value?.status!=='failed'){recoveryItems.value=[];return}
-  try {recoveryItems.value=(await videoProjectsApi.submissionRecovery(companyId.value,project.value.id)).data.items;recoveryError.value=''}
-  catch {recoveryError.value='恢复信息读取失败，请刷新重试'}
-}
-async function resolveRecovery(attemptId:string,action:'link'|'resubmit') {
-  if(!project.value || actionLoading.value)return
-  actionLoading.value=true;actionError.value=''
-  try {
-    await videoProjectsApi.resolveSubmission(companyId.value,project.value.id,attemptId,{action,confirmed:!!recoveryConfirmed.value[attemptId],
-      ...(action==='link'?{provider_task_id:recoveryIds.value[attemptId]?.trim()}:{})})
-    recoveryConfirmed.value[attemptId]=false;recoveryResolved.value=true
-    await loadRecovery()
-  } catch(e:any){actionError.value=typeof e.response?.data?.detail==='string'?e.response.data.detail:'处理失败，请检查任务ID后重试'}
-  finally {actionLoading.value=false}
-}
 const actionError = ref('')
 const project = ref<VideoProject | null>(null)
 const previewUrl = ref('')
@@ -236,7 +203,6 @@ async function refreshProject() {
     const res = await videoProjectsApi.get(companyId.value, route.params.id as string)
     if (disposed) return
     project.value = res.data
-    await loadRecovery()
     // Signed URLs change on every poll. Keep the loaded source for the same
     // asset so refreshing project status does not restart video playback.
     if (res.data.output_video_url && (!previewUrl.value || res.data.output_asset_id !== previewAssetId)) {

@@ -36,15 +36,19 @@ def test_retry_reuses_success_and_only_authorizes_failed_shots(db):
     assert failed.provider_task_id == 'bad'
 
 
-def test_unknown_submission_blocks_without_marking_other_shots(db):
-    _, _, p = setup_project(db)
-    failed = task(db, p, 1, 'failed', 'bad')
-    unknown = task(db, p, 2, 'submission_unknown')
-    with pytest.raises(HTTPException) as exc:
-        VideoService(db)._prepare_retry(p)
-    assert exc.value.status_code == 409
-    assert failed.status == 'failed'
-    assert unknown.status == 'submission_unknown'
+def test_unknown_submission_retries_without_id_and_preserves_history(db):
+    user, _, p = setup_project(db)
+    done = task(db, p, 1, 'completed', 'saved')
+    failed = task(db, p, 2, 'failed', 'bad')
+    unknown = task(db, p, 3, 'submission_unknown')
+    pending = task(db, p, 4, 'pending')
+    unknown.error_message = 'original disconnect'
+    VideoService(db)._prepare_retry(p, user_id=user.id)
+    assert failed.status == unknown.status == pending.status == 'retry_requested'
+    assert done.status == 'completed' and done.provider_task_id == 'saved'
+    assert unknown.provider_task_id is None and unknown.error_message == 'original disconnect'
+    assert unknown.input_params['_submission_recovery']['confirmed_by'] == str(user.id)
+    assert unknown.input_params['_submission_recovery']['source'] == 'explicit_retry'
 
 
 def test_legacy_http400_failure_can_retry(db):
@@ -77,7 +81,7 @@ def test_http_rejection_is_persisted_and_explicit_retry_creates_new_attempt(db):
 
 def test_retry_api_prevents_duplicate_execution_and_requires_membership(client, db, monkeypatch):
     user, company, p = setup_project(db)
-    task(db, p, 1, 'rejected'); db.commit()
+    unknown = task(db, p, 1, 'submission_unknown'); db.commit()
     enqueued = []
     monkeypatch.setattr(generation, 'provider', lambda: object())
     monkeypatch.setattr(generation, 'enqueue', enqueued.append)
@@ -87,6 +91,9 @@ def test_retry_api_prevents_duplicate_execution_and_requires_membership(client, 
     assert client.post(url, headers=auth_headers(outsider)).status_code == 403
     assert client.post(url, headers=auth_headers(user)).status_code == 200
     assert enqueued == [p.id]
+    db.refresh(unknown)
+    assert unknown.status == 'retry_requested'
+    assert unknown.input_params['_submission_recovery']['confirmed_by'] == str(user.id)
     assert client.post(url, headers=auth_headers(user)).status_code == 400
     assert enqueued == [p.id]
 
@@ -151,7 +158,7 @@ def test_submission_recovery_rejects_failed_lookup_and_duplicate_id(client, db, 
     assert client.post(url,headers=headers,json={'action':'resubmit','confirmed':True}).status_code==409
 
 
-def test_recovery_browser_confirmation_and_resume_controls(db, client):
+def test_recovery_browser_direct_retry_without_id(db, client, monkeypatch):
     import json,mimetypes
     from pathlib import Path
     from urllib.parse import urlparse
@@ -159,6 +166,10 @@ def test_recovery_browser_confirmation_and_resume_controls(db, client):
     from app.core.security import create_refresh_token
     user,company,p=setup_project(db)
     unknown=task(db,p,5,'submission_unknown');db.commit()
+    enqueued=[]
+    monkeypatch.setattr(generation,'provider',lambda:object())
+    monkeypatch.setattr(generation,'enqueue',enqueued.append)
+    monkeypatch.setattr(generation,'reference_url',lambda *args:None)
     root=Path(__file__).resolve().parents[2]/'frontend/dist'
     with sync_playwright() as pw:
         browser=pw.chromium.launch(headless=True,args=['--no-sandbox'])
@@ -177,21 +188,19 @@ def test_recovery_browser_confirmation_and_resume_controls(db, client):
         context.route('**/*',route)
         page=context.new_page();errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
         page.goto('https://campfire.dawoai.com/video/'+str(p.id))
-        expect(page.get_by_text('分镜 5 · 提交结果不确定',exact=True)).to_be_visible()
-        retry=page.get_by_role('button',name='确认重新提交此分镜',exact=True)
-        link=page.get_by_role('button',name='关联上游任务',exact=True)
-        expect(retry).to_be_disabled();expect(link).to_be_disabled()
-        page.get_by_role('checkbox').check()
-        expect(retry).to_be_enabled();expect(link).to_be_disabled()
-        page.get_by_placeholder('中转后台任务 ID（关联已有任务时填写）').fill('task-existing')
-        expect(link).to_be_enabled()
-        page.screenshot(path='/tmp/campfire-recovery-desktop.png',full_page=True)
+        expect(page.get_by_text('没有获取到任务 ID 的分镜直接重新提交生成',exact=False)).to_be_visible()
+        expect(page.get_by_placeholder('中转后台任务 ID（关联已有任务时填写）')).to_have_count(0)
+        expect(page.get_by_role('button',name='关联上游任务',exact=True)).to_have_count(0)
+        retry=page.get_by_role('button',name='重新执行',exact=True)
+        expect(retry).to_be_enabled()
+        page.screenshot(path='/tmp/campfire-retry-desktop.png',full_page=True)
         page.set_viewport_size({'width':390,'height':844})
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
-        page.screenshot(path='/tmp/campfire-recovery-mobile.png',full_page=True)
+        page.screenshot(path='/tmp/campfire-retry-mobile.png',full_page=True)
         retry.click()
-        expect(page.get_by_text('处理已保存。确认其他失败分镜后，点击页面上方“重新执行”继续。',exact=True)).to_be_visible()
         expect(retry).to_have_count(0)
         assert not errors
-        db.refresh(unknown);assert unknown.status=='retry_requested'
+        db.refresh(unknown);db.refresh(p)
+        assert unknown.status=='retry_requested' and p.project_status=='analyzing'
+        assert enqueued==[p.id]
         browser.close()

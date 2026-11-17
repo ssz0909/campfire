@@ -139,7 +139,7 @@ class VideoService:
         return ids
 
     def start_generation(
-        self, company_id: uuid.UUID, project_id: uuid.UUID, *, retry: bool = False
+        self, company_id: uuid.UUID, project_id: uuid.UUID, *, retry: bool = False, retry_user_id: uuid.UUID | None = None
     ) -> VideoProject:
         project = self.db.query(VideoProject).filter(
             VideoProject.id == project_id, VideoProject.company_id == company_id,
@@ -186,7 +186,7 @@ class VideoService:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if retry:
-            self._prepare_retry(project)
+            self._prepare_retry(project, user_id=retry_user_id)
         if not retry and project.selected_asset_ids and not project.storyboard:
             from app.services.video_director import fallback_plan
             from app.models.asset import Asset
@@ -336,8 +336,8 @@ class VideoService:
         self.db.commit()
         return {'status': 'resolved', 'message': '已保存处理结果；全部处理后点击重新执行，继续生成或获取结果。'}
 
-    def _prepare_retry(self, project):
-        """Authorize a fresh attempt only after a definitive failure/rejection."""
+    def _prepare_retry(self, project, *, user_id=None):
+        """Explicit retry resubmits missing IDs and preserves completed/known attempts."""
         import re
         tasks = self.db.query(ProviderTask).filter_by(video_project_id=project.id,
             company_id=project.company_id).order_by(ProviderTask.created_at.desc(), ProviderTask.id.desc()).all()
@@ -360,7 +360,18 @@ class VideoService:
                     task.error_message = note
                     fresh.append(task)
                 else:
-                    raise HTTPException(409, '上次提交结果不确定，无法安全重新执行；请先核对中转后台任务，避免重复计费')
+                    previous_status = task.status
+                    task.input_params = {**(task.input_params or {}), '_submission_recovery': {
+                        'action': 'resubmit', 'previous_status': previous_status,
+                        'confirmed_by': str(user_id) if user_id else None,
+                        'confirmed_at': datetime.now(timezone.utc).isoformat(),
+                        'source': 'explicit_retry'}}
+                    from app.models.audit_log import AuditLog
+                    self.db.add(AuditLog(user_id=user_id, company_id=project.company_id,
+                        action='video.submission_recovery', resource_type='video_project',
+                        resource_id=str(project.id), details={'attempt_id': str(task.id),
+                            'shot_number': task.shot_number, 'action': 'resubmit', 'source': 'explicit_retry'}))
+                    fresh.append(task)
             # A known active provider ID will be polled, never submitted again.
         for task in fresh:
             task.status = 'retry_requested'
