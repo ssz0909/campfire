@@ -89,3 +89,109 @@ def test_retry_api_prevents_duplicate_execution_and_requires_membership(client, 
     assert enqueued == [p.id]
     assert client.post(url, headers=auth_headers(user)).status_code == 400
     assert enqueued == [p.id]
+
+
+def test_submission_recovery_resubmit_requires_confirmation_and_keeps_history(client, db, monkeypatch):
+    user, company, p = setup_project(db)
+    done = task(db, p, 1, 'completed', 'saved')
+    unknown = task(db, p, 2, 'submission_unknown')
+    unknown.error_message = 'original disconnect'
+    db.commit()
+    base=f'/api/v1/companies/{company.id}/video-projects/{p.id}/submission-recovery'
+    outsider=create_test_user(db,email='recovery-outsider@example.com')
+    assert client.get(base,headers=auth_headers(outsider)).status_code==403
+    headers=auth_headers(user)
+    rows=client.get(base,headers=headers).json()['items']
+    assert len(rows)==1 and rows[0]['attempt_id']==str(unknown.id)
+    url=base+'/'+str(unknown.id)
+    assert client.post(url,headers=headers,json={'action':'resubmit'}).status_code==422
+    assert client.post(url,headers=headers,json={'action':'resubmit','confirmed':True}).status_code==200
+    db.refresh(unknown); db.refresh(done)
+    assert unknown.status=='retry_requested' and unknown.error_message=='original disconnect'
+    assert unknown.input_params['_submission_recovery']['confirmed_by']==str(user.id)
+    assert done.status=='completed'
+    assert client.post(url,headers=headers,json={'action':'resubmit','confirmed':True}).status_code==409
+    assert client.get(base,headers=headers).json()['items']==[]
+    VideoService(db)._prepare_retry(p)
+    from app.models.audit_log import AuditLog
+    assert db.query(AuditLog).filter_by(action='video.submission_recovery').count()==1
+
+
+def test_submission_recovery_links_existing_task_without_submission(client, db, monkeypatch):
+    user, company, p = setup_project(db)
+    unknown=task(db,p,2,'submission_unknown');db.commit()
+    upstream=AsyncMock()
+    upstream.get_task_status.return_value=VideoGenerationResult(provider_task_id='task-existing',status='processing')
+    monkeypatch.setattr(generation,'provider',lambda:upstream)
+    url=f'/api/v1/companies/{company.id}/video-projects/{p.id}/submission-recovery/{unknown.id}'
+    headers=auth_headers(user)
+    assert client.post(url,headers=headers,json={'action':'link','confirmed':True}).status_code==422
+    assert client.post(url,headers=headers,json={'action':'link','confirmed':True,'provider_task_id':'task-existing'}).status_code==200
+    db.refresh(unknown)
+    assert unknown.provider_task_id=='task-existing' and unknown.status=='processing'
+    upstream.submit_generation.assert_not_called()
+    VideoService(db)._prepare_retry(p)
+    assert unknown.status=='processing' and '_retry_poll_started_at' in unknown.input_params
+
+
+def test_submission_recovery_rejects_failed_lookup_and_duplicate_id(client, db, monkeypatch):
+    user, company, p = setup_project(db)
+    unknown=task(db,p,2,'submission_unknown')
+    task(db,p,1,'completed','taken-id');db.commit()
+    upstream=AsyncMock();upstream.get_task_status.side_effect=RuntimeError('network')
+    monkeypatch.setattr(generation,'provider',lambda:upstream)
+    url=f'/api/v1/companies/{company.id}/video-projects/{p.id}/submission-recovery/{unknown.id}'
+    headers=auth_headers(user)
+    for identifier,code in [('taken-id',409),('missing-id',422)]:
+        response=client.post(url,headers=headers,json={'action':'link','confirmed':True,'provider_task_id':identifier})
+        assert response.status_code==code
+    db.refresh(unknown)
+    assert unknown.status=='submission_unknown' and unknown.provider_task_id is None
+    p.project_status='generating_shots';db.commit()
+    assert client.post(url,headers=headers,json={'action':'resubmit','confirmed':True}).status_code==409
+
+
+def test_recovery_browser_confirmation_and_resume_controls(db, client):
+    import json,mimetypes
+    from pathlib import Path
+    from urllib.parse import urlparse
+    from playwright.sync_api import sync_playwright,expect
+    from app.core.security import create_refresh_token
+    user,company,p=setup_project(db)
+    unknown=task(db,p,5,'submission_unknown');db.commit()
+    root=Path(__file__).resolve().parents[2]/'frontend/dist'
+    with sync_playwright() as pw:
+        browser=pw.chromium.launch(headless=True,args=['--no-sandbox'])
+        context=browser.new_context(viewport={'width':1440,'height':1000})
+        context.add_init_script('localStorage.setItem("refresh_token",'+json.dumps(create_refresh_token({'sub':str(user.id)}))+');localStorage.setItem("currentCompanyId",'+json.dumps(str(company.id))+')')
+        def route(r):
+            path=urlparse(r.request.url).path
+            if path.startswith('/assets/'):
+                f=root/path.lstrip('/')
+                r.fulfill(status=200 if f.exists() else 404,body=f.read_bytes() if f.exists() else b'',content_type=mimetypes.guess_type(str(f))[0] or 'application/octet-stream')
+            elif path.startswith('/video/') or path=='/login':
+                r.fulfill(status=200,body=(root/'index.html').read_bytes(),content_type='text/html')
+            else:
+                response=client.request(r.request.method,r.request.url,content=r.request.post_data_buffer,headers=r.request.headers)
+                r.fulfill(status=response.status_code,body=response.content,headers=dict(response.headers))
+        context.route('**/*',route)
+        page=context.new_page();errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
+        page.goto('https://campfire.dawoai.com/video/'+str(p.id))
+        expect(page.get_by_text('分镜 5 · 提交结果不确定',exact=True)).to_be_visible()
+        retry=page.get_by_role('button',name='确认重新提交此分镜',exact=True)
+        link=page.get_by_role('button',name='关联上游任务',exact=True)
+        expect(retry).to_be_disabled();expect(link).to_be_disabled()
+        page.get_by_role('checkbox').check()
+        expect(retry).to_be_enabled();expect(link).to_be_disabled()
+        page.get_by_placeholder('中转后台任务 ID（关联已有任务时填写）').fill('task-existing')
+        expect(link).to_be_enabled()
+        page.screenshot(path='/tmp/campfire-recovery-desktop.png',full_page=True)
+        page.set_viewport_size({'width':390,'height':844})
+        assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+        page.screenshot(path='/tmp/campfire-recovery-mobile.png',full_page=True)
+        retry.click()
+        expect(page.get_by_text('处理已保存。确认其他失败分镜后，点击页面上方“重新执行”继续。',exact=True)).to_be_visible()
+        expect(retry).to_have_count(0)
+        assert not errors
+        db.refresh(unknown);assert unknown.status=='retry_requested'
+        browser.close()

@@ -273,6 +273,69 @@ class VideoService:
         self.db.commit();self.db.refresh(project)
         return project
 
+    def submission_recovery(self, company_id, project_id):
+        project = self.get_project(company_id, project_id)
+        tasks = self.db.query(ProviderTask).filter_by(video_project_id=project.id,
+            company_id=company_id).order_by(ProviderTask.created_at.desc(), ProviderTask.id.desc()).all()
+        latest = {}
+        for task in tasks:
+            latest.setdefault(task.shot_number, task)
+        return {'items': [{'attempt_id': str(t.id), 'shot_number': t.shot_number,
+            'status': t.status, 'submitted_at': t.submitted_at}
+            for t in latest.values() if not t.provider_task_id
+            and t.status not in ('completed', 'rejected', 'retry_requested')]}
+
+    def resolve_submission(self, company_id, project_id, attempt_id, user_id, data):
+        project = self.db.query(VideoProject).filter_by(id=project_id, company_id=company_id,
+            is_deleted=False).with_for_update().first()
+        if not project:
+            raise HTTPException(404, 'Video project not found')
+        if project.project_status != 'failed':
+            raise HTTPException(409, '仅失败项目可以处理提交结果不确定的分镜')
+        from app.services.video_generation import _active, _active_lock
+        with _active_lock:
+            if str(project.id) in _active:
+                raise HTTPException(409, '上次执行尚未结束，请稍后处理')
+        task = self.db.query(ProviderTask).filter_by(id=attempt_id, video_project_id=project.id,
+            company_id=company_id).first()
+        if not task:
+            raise HTTPException(404, '分镜提交记录不存在')
+        latest = self.db.query(ProviderTask).filter_by(video_project_id=project.id,
+            company_id=company_id, shot_number=task.shot_number).order_by(
+                ProviderTask.created_at.desc(), ProviderTask.id.desc()).first()
+        if latest.id != task.id or task.provider_task_id or task.status not in ('pending', 'submission_unknown'):
+            raise HTTPException(409, '此提交记录已处理或状态已变化，请刷新后重试')
+        if not data.confirmed:
+            raise HTTPException(422, '请先确认上游任务归属或重复计费风险')
+        previous_status = task.status
+        if data.action == 'link':
+            if self.db.query(ProviderTask).filter(ProviderTask.provider_task_id == data.provider_task_id,
+                    ProviderTask.id != task.id).first():
+                raise HTTPException(409, '该上游任务已关联其他分镜，不能重复关联')
+            from app.services.video_generation import provider
+            import asyncio
+            try:
+                result = asyncio.run(provider().get_task_status(data.provider_task_id))
+            except Exception as exc:
+                raise HTTPException(422, '无法读取该上游任务，请核对任务ID及中转接口；原记录未修改') from exc
+            if result.provider_task_id != data.provider_task_id:
+                raise HTTPException(422, '中转返回的任务ID不一致，未建立关联')
+            task.provider_task_id = data.provider_task_id
+            task.status = result.status
+            task.output_url = result.output_url
+            task.error_message = result.error if result.status == 'failed' else None
+        else:
+            task.status = 'retry_requested'
+        task.input_params = {**(task.input_params or {}), '_submission_recovery': {
+            'action': data.action, 'previous_status': previous_status, 'confirmed_by': str(user_id),
+            'confirmed_at': datetime.now(timezone.utc).isoformat()}}
+        from app.models.audit_log import AuditLog
+        self.db.add(AuditLog(user_id=user_id, company_id=company_id, action='video.submission_recovery',
+            resource_type='video_project', resource_id=str(project.id),
+            details={'attempt_id': str(task.id), 'shot_number': task.shot_number, 'action': data.action}))
+        self.db.commit()
+        return {'status': 'resolved', 'message': '已保存处理结果；全部处理后点击重新执行，继续生成或获取结果。'}
+
     def _prepare_retry(self, project):
         """Authorize a fresh attempt only after a definitive failure/rejection."""
         import re

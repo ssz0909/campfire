@@ -15,6 +15,7 @@ from app.schemas.video_project import (
     StoryboardUpdate,
     ShotRegenerateRequest,
     MusicSettings,
+    SubmissionRecoveryRequest,
 )
 from app.services.video_service import VideoService
 from app.utils.pagination import PaginatedResponse
@@ -107,6 +108,19 @@ def retry_generation(
     db: Session = Depends(get_db),
 ):
     return VideoService(db).start_generation(company_id, pid, retry=True)
+
+
+@router.get('/{company_id}/video-projects/{pid}/submission-recovery')
+def submission_recovery(company_id: uuid.UUID, pid: uuid.UUID,
+    _: User = Depends(require_permission(Permission.VIDEO_VIEW)), db: Session = Depends(get_db)):
+    return VideoService(db).submission_recovery(company_id, pid)
+
+
+@router.post('/{company_id}/video-projects/{pid}/submission-recovery/{attempt_id}')
+def resolve_submission(company_id: uuid.UUID, pid: uuid.UUID, attempt_id: uuid.UUID,
+    data: SubmissionRecoveryRequest,
+    user: User = Depends(require_permission(Permission.VIDEO_CREATE)), db: Session = Depends(get_db)):
+    return VideoService(db).resolve_submission(company_id, pid, attempt_id, user.id, data)
 
 
 @router.post("/{company_id}/video-projects/{pid}/approve", response_model=VideoProjectResponse)

@@ -130,3 +130,17 @@ class VideoProjectResponse(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class SubmissionRecoveryRequest(BaseModel):
+    action: Literal['link', 'resubmit']
+    confirmed: bool = False
+    provider_task_id: str | None = Field(default=None, min_length=1, max_length=255, pattern=r'^[A-Za-z0-9_.:-]+$')
+
+    @model_validator(mode='after')
+    def validate_recovery(self):
+        if self.action == 'link' and not self.provider_task_id:
+            raise ValueError('关联上游任务需要填写任务ID')
+        if self.action == 'resubmit' and self.provider_task_id:
+            raise ValueError('重新提交不能同时指定上游任务ID')
+        return self

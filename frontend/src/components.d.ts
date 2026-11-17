@@ -21,6 +21,8 @@ declare module 'vue' {
     IndustryTemplatePicker: typeof import('./components/video/IndustryTemplatePicker.vue')['default']
     LanguageToggle: typeof import('./components/common/LanguageToggle.vue')['default']
     MusicPicker: typeof import('./components/video/MusicPicker.vue')['default']
+    NCheckbox: typeof import('naive-ui')['NCheckbox']
+    NInput: typeof import('naive-ui')['NInput']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     StatusBadge: typeof import('./components/common/StatusBadge.vue')['default']

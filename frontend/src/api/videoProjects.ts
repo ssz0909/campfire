@@ -2,6 +2,13 @@ import apiClient from './client'
 import type { VideoProject } from '@/types/videoProject'
 
 export const videoProjectsApi = {
+  submissionRecovery(companyId:string, projectId:string) {
+    return apiClient.get<{items:{attempt_id:string;shot_number:number|null;status:string;submitted_at:string|null}[]}>(
+      '/companies/'+companyId+'/video-projects/'+projectId+'/submission-recovery')
+  },
+  resolveSubmission(companyId:string, projectId:string, attemptId:string, data:{action:'link'|'resubmit';confirmed:boolean;provider_task_id?:string}) {
+    return apiClient.post('/companies/'+companyId+'/video-projects/'+projectId+'/submission-recovery/'+attemptId,data)
+  },
   updateMusic(companyId:string, projectId:string, data:{music_asset_id:string|null;music_volume:number}, draft=false):Promise<{data:VideoProject}> {
     const url=`/companies/${companyId}/video-projects/${projectId}`
     return (draft?apiClient.put(url,data):apiClient.post(url+'/music',data,{timeout:180000})).then(normalize)
