@@ -89,11 +89,18 @@ class OperationsWorkflow:
             from app.services.video_director import target_duration
             video_duration=target_duration(task.input_params, (task.input_params or {}).get('execution_goal') or goal)
             import math
+            from app.services.video_requirements import task_visual_text, requires_people_opening, mark_opening_candidates
+            visual_text = task_visual_text(task)
+            people_opening = requires_people_opening(visual_text)
             pool_limit=min(40,max(8,math.ceil(video_duration/2.5)+4))
-            selected_assets=select_assets_for_video(db,company_id,goal,template=template,
-                limit=pool_limit,rotation_key=str(task.id),exclude_task_id=task.id)
+            selected_assets=select_assets_for_video(db,company_id,visual_text,template=template,
+                limit=pool_limit,rotation_key=str(task.id),exclude_task_id=task.id,require_people_opening=people_opening)
             sources['selected_assets']=[{'id':str(a.id),'name':a.name,'category':a.category,'tags':a.tags or [],
                 'width':a.width,'height':a.height,'people_visible':((a.asset_metadata or {}).get('vision_analysis') or {}).get('people_visible'), 'description':((a.asset_metadata or {}).get('vision_analysis') or {}).get('visual_description') or a.source_description} for a in selected_assets]
+            sources['selected_assets'] = mark_opening_candidates(sources['selected_assets'], people_opening)
+            sources['visual_requirements'] = {'people_opening': people_opening}
+            if people_opening:
+                runtime._append_log(task, 'info', '已启用人物首镜约束：优先轮换符合要求的人物图片，首镜不符将停止制作')
             if (task.input_params or {}).get('reuse_policy', 'fresh') != 'fresh':
                 from types import SimpleNamespace
                 from app.services.video_clip_library import approved_candidates
@@ -164,7 +171,7 @@ class OperationsWorkflow:
             if selected_assets:
                 sections.append({'title':'已选素材与镜头顺序','content':'\n'.join(
                     f"镜头{i+1}｜素材ID：{a.id}｜{a.name}｜{'、'.join(a.tags or [])}｜{a.source_description or ''}"
-                    for i,a in enumerate(selected_assets))+'\n候选素材可重新排序；按结构化分镜选材与裁切，不要求全部使用，避免相邻重复场景。'})
+                    for i,a in enumerate(selected_assets))+'\n候选素材可重新排序；按结构化分镜选材与裁切，不要求全部使用，避免相邻重复场景。'+('首镜必须使用识别到真人的图片，不得用风景替代。' if people_opening else '')})
         elif role == "data_analyst":
             sections += [{"title": "经营数据分析", "content": "\n".join(metric_lines)},
                          {"title": "数据质量与结论边界", "content": "同步订单不是完整经营账本。当前未接入内容曝光、点击、咨询与成交归因数据，无法计算内容转化率或ROI。\n复盘建议：确认同步范围，补充渠道数据后比较同口径的前后周期。"}]

@@ -125,6 +125,10 @@ def enrich(result, task, runtime, forbidden_words):
         system += render_guidance(snapshot)
     if result['role'] == 'video_producer':
         system += COST_DIRECTOR_PROMPT if generation_mode == 'cost' else DIRECTOR_PROMPT
+        if (result.get('data_sources', {}).get('visual_requirements') or {}).get('people_opening'):
+            system += ('本任务首镜必须引用已识别到真人的候选图片（people_visible=true，旧素材可依据明确人物描述）。'
+                '优先使用排在首位的符合要求候选，它已按人物历史使用情况轮换；不能用空景替代，也不能向无人图添加人物。'
+                '首镜不符合会被后端拒绝，请先满足此硬性要求再优化主题和节奏。')
         system += ('候选图片已按本次任务轮换排序，并对最近视频实际使用的图片降权；同等符合任务时优先靠前候选，'
             '先覆盖任务指定的不同主题和场景，再选互补细节，不要每次固定选同一组人物、山景和泳池。'
             '多样性不得覆盖素材事实、清晰度、人物入镜等明确要求；确实只有同一张可满足时允许重选，不虚构新场景。'

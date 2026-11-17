@@ -19,10 +19,15 @@ CATEGORY_TERMS={
 }
 
 
-def select_assets_for_video(db,company_id,goal,limit=40,template=None,rotation_key=None,exclude_task_id=None):
+def select_assets_for_video(db,company_id,goal,limit=40,template=None,rotation_key=None,exclude_task_id=None,require_people_opening=None):
+    from app.services.video_requirements import requires_people_opening
+    from app.services.video_motion import people_visible
+    required = requires_people_opening(goal) if require_people_opening is None else require_people_opening
     assets=db.query(Asset).filter(Asset.company_id==company_id,Asset.asset_type=='image',
         Asset.is_deleted==False,Asset.is_available==True,Asset.processing_status=='ready').all()
-    if not assets:return []
+    if not assets:
+        if required:raise ValueError('任务要求人物出镜开头，但没有可用图片，请补充素材')
+        return []
     topic=(goal or '').casefold()
     hints = ((template or {}).get('content') or {}).get('selection_keywords', [])
     recent = {}
@@ -46,6 +51,9 @@ def select_assets_for_video(db,company_id,goal,limit=40,template=None,rotation_k
         score=sum(1 for value in (asset.tags or []) if value and str(value).casefold() in topic)
         score+=sum(2 for term in CATEGORY_TERMS.get(asset.category,()) if term in topic)
         score+=sum(1 for value in [analysis.get('caption',''),asset.source_description or ''] if value and value.casefold() in topic)
+        # Structured people metadata must participate even if tags say nothing
+        # about people. A hard opening requirement is preserved below, too.
+        if required and people_visible(asset):score += 1
         facts = ' '.join([asset.name or '', asset.source_description or '', analysis.get('visual_description', ''),
                           ' '.join(asset.tags or []), ' '.join(CATEGORY_TERMS.get(asset.category, ())) ]).casefold()
         # Industry is a tie-breaker only; the user's subject always ranks first.
@@ -67,11 +75,20 @@ def select_assets_for_video(db,company_id,goal,limit=40,template=None,rotation_k
     # distinct sources for the requested shot budget when alternatives lack.
     unused=[item for item in scored if str(item[3].id) not in recent]
     categories={item[3].category for item in scored}
-    if len(unused)>=limit and categories <= {item[3].category for item in unused}:
+    if len(unused)>=limit and categories <= {item[3].category for item in unused} and (not required or any(people_visible(item[3]) for item in unused)):
         scored=unused
     # Select complementary scenes before adding repeated categories. An
     # oversized pool is safe for the director to reduce, unlike a fixed 3 images.
     chosen=[];seen={}
+    if required:
+        eligible = [i for i,item in enumerate(scored) if people_visible(item[3])]
+        if not eligible:
+            raise ValueError('任务要求人物出镜开头，但没有识别到符合条件的真人图片，请补充素材或重新识别')
+        # Rotate *within* eligible people before comparing ordinary scene
+        # relevance, so a high-scoring familiar portrait cannot monopolize.
+        best=max(eligible,key=lambda i:(-recent.get(str(scored[i][3].id),0),scored[i][0],scored[i][2],scored[i][4]))
+        asset=scored.pop(best)[3]
+        chosen.append(asset);seen[asset.category]=1
     while scored and len(chosen)<limit:
         best=max(range(len(scored)),key=lambda i:(scored[i][0]-2*seen.get(scored[i][3].category,0),scored[i][5],scored[i][2],scored[i][4]))
         _,_,_,asset,_,_=scored.pop(best)

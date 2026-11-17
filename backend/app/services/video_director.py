@@ -67,6 +67,8 @@ def validate_plan(shots, assets, duration, *, allow_legacy_reuse=False):
     if not 5 <= len(shots) <= 40:
         raise ValueError('分镜需包含5至40个短镜头，以覆盖15至60秒成片')
     plan = [DirectorShot.model_validate(s).model_dump() for s in shots]
+    from app.services.video_requirements import validate_opening
+    validate_opening(plan, assets)
     if abs(sum(s['duration_seconds'] for s in plan) - duration) > 0.05:
         raise ValueError('分镜时长之和与目标成片时长不一致，请重新生成脚本')
     if plan[0]['duration_seconds'] > 2:
@@ -125,6 +127,8 @@ def fallback_plan(assets, duration=30):
     """Honest local draft with varied shots, used only without an LLM plan."""
     if not assets:
         raise ValueError('缺少已识别且可用的图片素材，请上传素材后再制作')
+    from app.services.video_requirements import opening_first
+    assets = opening_first(assets)
     minimum = max(5, 1 + math.ceil((duration - 2) / 3.5))
     if len(assets) < minimum:
         raise ValueError(f'制作{duration}秒且不重复素材至少需要{minimum}张不同图片，当前仅{len(assets)}张，请补充素材')

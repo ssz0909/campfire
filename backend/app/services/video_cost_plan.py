@@ -45,6 +45,8 @@ def cost_plan(assets, duration=30):
     if not isinstance(duration, (int, float)) or not math.isfinite(duration) or not 15 <= duration <= 60:
         raise ValueError('成本优先成片时长必须为15至60秒')
     count = math.ceil(duration / 5)
+    from app.services.video_requirements import opening_first
+    assets = opening_first(assets)
     unique = list({str(a['id']): a for a in assets}.values())
     if len(unique) < count:
         raise ValueError(f'成本优先制作{duration}秒视频至少需要{count}张不同场景图片，不会循环补足')
@@ -86,6 +88,8 @@ def validate_cost_plan(plan, assets, duration):
     allowed = {str(a['id']) for a in assets}
     if len(plan) != math.ceil(duration / 5):
         raise ValueError('成本优先片段数量必须等于成片时长除以5后向上取整')
+    from app.services.video_requirements import validate_opening
+    validate_opening(plan, assets)
     used = set()
     validated = []
     for index, raw in enumerate(plan):

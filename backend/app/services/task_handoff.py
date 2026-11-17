@@ -52,6 +52,9 @@ def create_video_handoff(db, task):
     if not project:
         from app.services.asset_selection import select_assets_for_video
         goal=' '.join([task.title,(task.input_params or {}).get('goal',''),(task.output or {}).get('report_markdown','')])
+        from app.services.video_requirements import task_visual_text, requires_people_opening, mark_opening_candidates
+        people_opening = requires_people_opening(task_visual_text(task)) or bool(
+            ((task.output or {}).get('data_sources', {}).get('visual_requirements') or {}).get('people_opening'))
         if 'selected_asset_ids' in (task.output or {}):
             from app.models.asset import Asset
             from app.services.video_service import VideoService
@@ -62,11 +65,13 @@ def create_video_handoff(db, task):
         else:
             from app.services.industry_templates import ensure_task_snapshot
             selected=select_assets_for_video(db,task.company_id,goal,template=ensure_task_snapshot(db, task),
-                rotation_key=str(task.id),exclude_task_id=task.id)
+                rotation_key=str(task.id),exclude_task_id=task.id,require_people_opening=people_opening)
         from app.services.video_director import validate_plan, fallback_plan, target_duration
         duration = target_duration((task.output or {}).get('video_brief') or task.input_params, goal)
         generation_mode = (task.input_params or {}).get('generation_mode', 'quality')
-        descriptors = [{'id':str(a.id),'name':a.name, 'description':((a.asset_metadata or {}).get('vision_analysis') or {}).get('visual_description') or a.source_description} for a in selected]
+        descriptors = mark_opening_candidates([{'id':str(a.id),'name':a.name,
+            'people_visible':((a.asset_metadata or {}).get('vision_analysis') or {}).get('people_visible'),
+            'description':((a.asset_metadata or {}).get('vision_analysis') or {}).get('visual_description') or a.source_description} for a in selected], people_opening)
         raw_plan = (task.output or {}).get('video_storyboard')
         if not raw_plan and (task.output or {}).get('mode') == 'llm':
             from fastapi import HTTPException
