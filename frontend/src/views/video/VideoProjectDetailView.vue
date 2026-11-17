@@ -70,11 +70,6 @@
           {{ project.status==='draft'?'保存配乐设置':'替换成片配乐（不重新生成视频）' }}
         </n-button>
       </AppCard>
-      <AppCard v-if="project.status === 'failed'">
-        <h2 class="section-title">失败恢复</h2>
-        <p>点击上方“重新执行”即可继续：已完成的分镜会复用，已保存生成任务的分镜继续获取结果；没有获取到任务 ID 的分镜直接重新提交生成，无需填写任务 ID。</p>
-        <p>重新提交可能产生新的生成费用；如果上次请求已被中转受理，可能重复计费。</p>
-      </AppCard>
       <AppCard v-if="project.shots?.some(s=>s.purpose)">
         <h2 class="section-title">分镜与节奏 · {{ project.target_duration_seconds }}秒</h2>
         <div v-for="shot in project.shots" :key="shot.id">
