@@ -18,3 +18,10 @@
 - 备份：/opt/campfire/backups/before-recovery-20261117T115737Z，包含旧版本、数据库、Nginx及rollback.sh。无数据库迁移。
 - 更新前验证完整源文件基线并两次检查无活跃任务；新发布包校验通过。保留旧静态资源及Bing/Google配置。
 - 未代用户确认重新计费、关联任务或重启生成。
+
+## 直接重新执行更新
+
+- 2026-11-17部署提交98e482c，版本 /opt/campfire/releases/direct-retry-20261117T120659Z。
+- 备份 /opt/campfire/backups/before-direct-retry-20261117T120659Z，包含旧版本、数据库、Nginx及rollback.sh。无数据库迁移。
+- 258个基线源文件与113个覆盖文件校验通过，切换前两次检查无活跃任务。公网视频页入口、详情脚本与本地构建一致，健康检查正常。
+- 经用户要求，对此前缺少中转ID的失败项目调用一次重新执行，HTTP 200；未循环提交。
