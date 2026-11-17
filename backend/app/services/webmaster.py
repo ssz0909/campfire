@@ -1,4 +1,4 @@
-"""Domain verification, attributed report import and bounded GSC API collection."""
+"""Domain verification, attributed report import and bounded Google/Bing API collection."""
 import csv
 import html
 import io
@@ -73,6 +73,18 @@ def save_config(db,provider,values):
             credentials={k:credentials[k] for k in ('type','client_email','private_key')}
         result['service_account']=credentials
         if result['auto_sync'] and not credentials:raise WebmasterError('启用自动同步前请先保存Google服务账号凭据')
+    elif provider=='bing':
+        prop=values.get('property') or ORIGIN+'/'
+        if prop not in (ORIGIN,ORIGIN+'/'):raise WebmasterError('Bing站点只能选择营火HTTPS网址，请与站长工具中的站点地址一致')
+        result['property']=prop
+        api_key=old.get('api_key','')
+        if values.get('clear_credentials'):api_key=''
+        supplied=values.get('api_key','').strip()
+        if supplied:
+            if not re.fullmatch(r'[A-Za-z0-9_-]{16,256}',supplied):raise WebmasterError('Bing API Key格式不正确，请从Bing站长工具复制完整密钥')
+            api_key=supplied
+        result['api_key']=api_key
+        if result['auto_sync'] and not api_key:raise WebmasterError('启用自动同步前请先保存Bing API Key')
     elif result['auto_sync']:raise WebmasterError('该渠道目前使用报表导入，不支持自动同步')
     write(db,'config.'+provider,result)
 
@@ -85,9 +97,9 @@ def settings_view(db):
         items.append({'provider':provider,**info,'verification_token':c.get('verification_token',''),
             'verification_status':'configured_not_verified' if c.get('verification_token') else 'not_configured',
             'property':c.get('property',ORIGIN+'/'),'auto_sync':c.get('auto_sync',False),
-            'credentials_configured':bool(c.get('service_account')),
+            'credentials_configured':bool(c.get('service_account') if provider=='google' else c.get('api_key') if provider=='bing' else False),
             'service_account_email':c.get('service_account',{}).get('client_email',''),
-            'mode':'api_and_import' if provider=='google' else 'report_import',
+            'mode':'api_and_import' if provider in ('google','bing') else 'report_import',
             'sync':state(db,provider)})
     return {'origin':ORIGIN,'sitemap':ORIGIN+'/sitemap.xml','items':items}
 
@@ -161,9 +173,9 @@ def external_metrics(db,site=None,days=30,homepage=False):
     for p,clicks,impressions,last_day,updated,weighted,known in rows:
         sources=[v for (v,) in q.filter(GeoSearchDaily.provider==p).with_entities(GeoSearchDaily.source_name).distinct().all()]
         items.append({'provider':p,'name':PROVIDERS[p]['name'],'clicks':clicks,'impressions':impressions,
-            'ctr':clicks/impressions if impressions else 0,'average_position':weighted/known if known else None,'last_data_day':last_day,'updated_at':updated.isoformat(), 'sources':sources})
+            'ctr':clicks/impressions if impressions else 0,'average_position':weighted/known if known else None,'last_data_day':last_day,'updated_at':updated.isoformat(), 'sources':sources,'data_note':('Bing API仅返回热门页面，官方按周更新；按返回日期归入所选范围，不代表精确逐日或全量数据。' if p=='bing' and q.filter(GeoSearchDaily.provider=='bing',GeoSearchDaily.source=='api').first() else '')})
     return {'status':'available' if items else 'no_data','items':items,
-        'message':'搜索表现按渠道分别统计；数据有延迟，报表导入保留来源，不代表收录数量或模型推荐。' if items else '暂无外部搜索数据；管理员可在GEO站长工具中配置Google同步或导入渠道报表。'}
+        'message':'搜索表现按渠道分别统计；数据有延迟，报表导入保留来源，不代表收录数量或模型推荐。' if items else '暂无外部搜索数据；管理员可在站长工具中配置Google或Bing自动同步，或导入渠道报表。'}
 
 
 def google_rows(c):
@@ -200,40 +212,108 @@ def google_rows(c):
         return rows
 
 
-def enqueue(db):
-    c=config(db,'google')
-    if not c.get('service_account'):raise WebmasterError('请先保存Google服务账号凭据，并在Search Console中授予资源读取权限')
-    s=state(db,'google')
+
+def bing_rows(c):
+    """Official GetPageStats returns top pages, refreshed weekly, not a full export."""
+    if not c.get('api_key'):raise WebmasterError('请先保存有该站点访问权限的Bing API Key')
+    # Bing requires its key in the query string. Redact HTTP client logging too.
+    import logging
+    class RedactKey(logging.Filter):
+        def filter(self,record):
+            record.msg=record.getMessage().replace(c['api_key'],'[REDACTED]')
+            record.args=()
+            return True
+    redactor=RedactKey()
+    loggers=[logging.getLogger(name) for name in ('httpx','httpcore.http11','httpcore.http2')]
+    for logger in loggers:logger.addFilter(redactor)
+    try:
+        with httpx.Client(timeout=25,follow_redirects=False) as client:
+            response=client.get('https://ssl.bing.com/webmaster/api.svc/json/GetPageStats',
+                params={'siteUrl':c.get('property',ORIGIN+'/'),'apikey':c['api_key']})
+        if response.status_code!=200:
+            raise WebmasterError(f'Bing搜索数据读取失败 HTTP {response.status_code}，请检查API Key、站点验证及账号权限')
+        payload=response.json()
+        data=payload.get('d') if isinstance(payload,dict) else None
+        if isinstance(data,dict) and ('ErrorCode' in data or 'Message' in data):
+            raise WebmasterError('Bing接口拒绝本次请求，请检查API Key、已验证站点及账号权限')
+        if not isinstance(data,list):raise WebmasterError('Bing返回的数据结构异常，未保存本次结果')
+        if len(data)>10000:raise WebmasterError('Bing返回超过10000条记录，请使用报表导入；本次未写入')
+        end=date.today();start=end-timedelta(days=29)
+        rows=[];seen=set()
+        for raw in data:
+            if not isinstance(raw,dict):raise WebmasterError('Bing返回的页面记录异常，未保存本次结果')
+            stamp=raw.get('Date')
+            match=re.fullmatch(r'/Date\((-?\d+)([+-]\d{4})?\)/',str(stamp))
+            try:
+                if match:
+                    offset=match[2]
+                    zone=timezone(timedelta(minutes=(1 if offset[0]=='+' else -1)*(int(offset[1:3])*60+int(offset[3:])))) if offset else timezone.utc
+                    day=datetime.fromtimestamp(int(match[1])/1000,zone).date()
+                else:
+                    day=datetime.fromisoformat(str(stamp).replace('Z','+00:00')).date()
+            except (ValueError,TypeError,OverflowError,OSError):
+                raise WebmasterError('Bing返回的日期格式异常，未保存本次结果') from None
+            if not start<=day<=end:continue
+            page=raw.get('Query')
+            if not isinstance(page,str):raise WebmasterError('Bing返回的页面地址缺失，未保存本次结果')
+            # A verified resource can contain URLs outside the public origin.
+            parsed=urlsplit(page)
+            if parsed.scheme!='https' or parsed.netloc!='campfire.dawoai.com':continue
+            position=raw.get('AvgImpressionPosition')
+            if position in (0,0.0,'0'):position=None
+            item=row_values({'day':day.isoformat(),'page':page,'clicks':raw.get('Clicks'),
+                'impressions':raw.get('Impressions'),'position':position})
+            key=(item['page'],item['day'])
+            if key in seen:raise WebmasterError('Bing返回重复页面/日期，无法安全汇总；本次未写入，请改用报表导入')
+            seen.add(key);rows.append(item)
+        return rows
+    finally:
+        for logger in loggers:logger.removeFilter(redactor)
+
+
+def has_credentials(c,provider):
+    return bool(c.get('service_account') if provider=='google' else c.get('api_key'))
+
+
+def enqueue(db,provider='google'):
+    if provider not in ('google','bing'):raise WebmasterError('该渠道暂不支持自动同步')
+    c=config(db,provider)
+    if not has_credentials(c,provider):raise WebmasterError('请先保存'+('Google服务账号凭据，并在Search Console中授予资源读取权限' if provider=='google' else 'Bing API Key，并确认账号可访问该已验证站点'))
+    s=state(db,provider)
     if s.get('status') in ('queued','running'):return s
     s={'status':'queued','requested_at':datetime.now(timezone.utc).isoformat()}
-    write(db,'state.google',s)
+    write(db,'state.'+provider,s)
     return s
 
 
-def run_due(db):
-    """Called only by the dedicated, globally serialized collector worker."""
-    c=config(db,'google');s=state(db,'google');now=datetime.now(timezone.utc)
+def run_provider_due(db,provider):
+    c=config(db,provider);s=state(db,provider);now=datetime.now(timezone.utc)
     elapsed=(now-datetime.fromisoformat(s['started_at'])).total_seconds() if s.get('started_at') else 10**9
     due=s.get('status')=='queued' or (s.get('status')=='running' and elapsed>900) or (c.get('auto_sync') and elapsed>86400)
-    if not due:return
-    if not c.get('service_account'):return
+    if not due or not has_credentials(c,provider):return
     s={**s,'status':'running','started_at':now.isoformat(),'error':''}
-    write(db,'state.google',s);db.commit()
+    write(db,'state.'+provider,s);db.commit()
     try:
-        rows=google_rows(c)
-        # Only replace API evidence in the queried period after every page was read.
-        end=date.today()-timedelta(days=3);start=end-timedelta(days=29)
-        db.query(GeoSearchDaily).filter(GeoSearchDaily.provider=='google',GeoSearchDaily.source=='api',
+        rows=google_rows(c) if provider=='google' else bing_rows(c)
+        end=date.today()-timedelta(days=3 if provider=='google' else 0);start=end-timedelta(days=29)
+        # Validate the whole response before replacing previous API evidence.
+        db.query(GeoSearchDaily).filter(GeoSearchDaily.provider==provider,GeoSearchDaily.source=='api',
             GeoSearchDaily.day>=start.isoformat(),GeoSearchDaily.day<=end.isoformat()).delete(synchronize_session=False)
-        summary=store_rows(db,'google',rows,'api','Google Search Console API · web · final · date/page')
+        source_name='Google Search Console API · web · final · date/page' if provider=='google' else 'Bing Webmaster API · top pages · weekly update'
+        summary=store_rows(db,provider,rows,'api',source_name)
         s.update(status='success',summary=summary,data_start=start.isoformat(),data_end=end.isoformat(),
-                 note='已读取API返回记录；搜索分析接口可能只返回主要记录，不代表全量收录或全量搜索。')
+            note='已读取API返回记录；不代表全量收录或全量搜索。'+('Bing仅返回热门页面，按周更新；日期为接口返回日期，不是精确逐日报表。' if provider=='bing' else ''))
     except Exception as exc:
         db.rollback()
-        # Never persist HTTP exception strings: they may contain credentials or payloads.
         s.update(status='error',error=str(exc) if isinstance(exc,WebmasterError) else '同步异常，未修改本次数据；请检查网络、凭据和接口返回')
     s['finished_at']=datetime.now(timezone.utc).isoformat()
-    write(db,'state.google',s);db.commit()
+    write(db,'state.'+provider,s);db.commit()
+
+
+def run_due(db):
+    """Dedicated globally serialized collector; one channel failure cannot block the other."""
+    for provider in ('google','bing'):
+        run_provider_due(db,provider)
 
 
 def start():

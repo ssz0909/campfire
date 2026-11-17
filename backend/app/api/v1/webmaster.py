@@ -17,6 +17,7 @@ class Config(BaseModel):
     verification_token:str=Field('',max_length=1000)
     property:str=Field(service.ORIGIN+'/',max_length=150)
     service_account_json:str=Field('',max_length=20000)
+    api_key:str=Field('',max_length=256)
     clear_credentials:bool=False
     auto_sync:bool=False
 
@@ -35,11 +36,11 @@ def save(provider:Provider,data:Config,user:User=Depends(require_platform_admin)
     audit(db,user,'webmaster.config',provider);db.commit()
     return service.settings_view(db)
 
-@router.post('/google/sync',status_code=202)
-def sync(user:User=Depends(require_platform_admin),db:Session=Depends(get_db)):
-    try:result=service.enqueue(db)
+@router.post('/{provider}/sync',status_code=202)
+def sync(provider:Provider,user:User=Depends(require_platform_admin),db:Session=Depends(get_db)):
+    try:result=service.enqueue(db,provider)
     except service.WebmasterError as exc:raise HTTPException(422,str(exc)) from None
-    audit(db,user,'webmaster.sync_requested','google');db.commit()
+    audit(db,user,'webmaster.sync_requested',provider);db.commit()
     return result
 
 @router.get('/report-template.csv')

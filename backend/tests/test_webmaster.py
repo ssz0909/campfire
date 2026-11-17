@@ -149,3 +149,121 @@ def test_report_preserves_distinct_query_urls_and_rejects_malformed_columns():
     assert rows[0]['page']!=rows[1]['page']
     with pytest.raises(w.WebmasterError):w.parse_csv(f'day,page,clicks,impressions\n{day},/shop/a,1,10,extra'.encode())
     with pytest.raises(w.WebmasterError):w.parse_csv(f'day,page,clicks,impressions,position\n{day},/shop/a,1,10'.encode())
+
+
+def test_bing_credentials_permissions_and_queue(db,client):
+    _,_,ordinary,_=setup(db)
+    assert client.post('/api/v1/admin/webmaster/bing/sync',headers=ordinary).status_code==403
+    _,_,h,_=admin(db)
+    url='/api/v1/admin/webmaster/bing'
+    assert client.post(url+'/sync',headers=h).status_code==422
+    key='test-bing-key-1234567890'
+    r=client.put(url,headers=h,json={'api_key':key,'auto_sync':True})
+    assert r.status_code==200 and key not in r.text
+    item=next(i for i in r.json()['items'] if i['provider']=='bing')
+    assert item['credentials_configured'] and item['mode']=='api_and_import'
+    assert key not in db.get(PlatformKeyValue,w.KEY+'config.bing').encrypted_value
+    assert client.put(url,headers=h,json={'api_key':''}).status_code==200
+    assert w.config(db,'bing')['api_key']==key
+    assert client.post(url+'/sync',headers=h).status_code==202
+    first=w.state(db,'bing')
+    assert client.post(url+'/sync',headers=h).status_code==202
+    assert w.state(db,'bing')==first
+    assert client.put(url,headers=h,json={'property':'https://evil.example','api_key':key}).status_code==422
+    assert client.put(url,headers=h,json={'api_key':'bad key'}).status_code==422
+    assert client.put(url,headers=h,json={'clear_credentials':True}).status_code==200
+    assert client.post(url+'/sync',headers=h).status_code==422
+    assert client.post('/api/v1/admin/webmaster/baidu/sync',headers=h).status_code==422
+
+
+def test_bing_official_endpoint_dates_filters_and_redaction(monkeypatch,caplog):
+    import logging
+    from datetime import datetime,timezone
+    day=date.today()-timedelta(days=2)
+    epoch=int(datetime.combine(day,datetime.min.time(),timezone.utc).timestamp()*1000)
+    key='private-bing-key-1234567890'
+    payload={'d':[{'Query':w.ORIGIN+'/shop/test','Date':f'/Date({epoch}-0700)/','Clicks':2,'Impressions':20,'AvgImpressionPosition':3},
+        {'Query':'https://evil.example/','Date':day.isoformat(),'Clicks':1,'Impressions':2},
+        {'Query':w.ORIGIN+'/','Date':day.isoformat()+'T00:00:00Z','Clicks':0,'Impressions':0,'AvgImpressionPosition':0}]}
+    class Fake:
+        def __init__(self,**kw):assert kw['follow_redirects'] is False
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+        def get(self,url,**kw):
+            assert url=='https://ssl.bing.com/webmaster/api.svc/json/GetPageStats'
+            assert kw['params']=={'siteUrl':w.ORIGIN+'/','apikey':key}
+            logging.getLogger('httpx').info('HTTP GET %s?apikey=%s',url,key)
+            return httpx.Response(200,json=payload)
+    monkeypatch.setattr(w.httpx,'Client',Fake)
+    with caplog.at_level(logging.INFO,logger='httpx'):
+        rows=w.bing_rows({'api_key':key})
+    assert len(rows)==2 and rows[0]['day']==(day-timedelta(days=1)).isoformat()
+    assert rows[1]['position'] is None
+    assert key not in caplog.text and '[REDACTED]' in caplog.text
+    payload['d'].append(payload['d'][0].copy())
+    with pytest.raises(w.WebmasterError,match='重复'):w.bing_rows({'api_key':key})
+    payload['d']={'ErrorCode':4,'Message':key}
+    with pytest.raises(w.WebmasterError) as e:w.bing_rows({'api_key':key})
+    assert key not in str(e.value)
+
+
+def test_bing_sync_atomic_attribution_and_channel_isolation(db,client,monkeypatch):
+    _,_,h,url,slug,site=published(db,client,monkeypatch)
+    w.save_config(db,'bing',{'api_key':'bing-key-1234567890','auto_sync':True})
+    rows=[w.row_values({'page':w.ORIGIN+'/shop/'+slug,'day':date.today().isoformat(),'clicks':3,'impressions':30,'position':2})]
+    monkeypatch.setattr(w,'bing_rows',lambda c:rows)
+    w.enqueue(db,'bing');db.commit();w.run_due(db)
+    assert w.state(db,'bing')['status']=='success'
+    assert db.query(GeoSearchDaily).filter_by(provider='bing').count()==1
+    metrics=client.get(url+'/metrics',headers=h).json()['metrics']['external_search']['items'][0]
+    assert metrics['clicks']==3 and 'Bing' in metrics['data_note']
+    w.enqueue(db,'bing');db.commit();w.run_due(db)
+    assert db.query(GeoSearchDaily).count()==1
+    def fail(c):raise httpx.ReadTimeout('https://bing.invalid?apikey=secret-do-not-store')
+    monkeypatch.setattr(w,'bing_rows',fail)
+    w.enqueue(db,'bing');db.commit();w.run_due(db)
+    assert w.state(db,'bing')['status']=='error'
+    assert 'secret' not in json.dumps(w.state(db,'bing'))
+    assert db.query(GeoSearchDaily).count()==1
+    monkeypatch.setattr(w,'bing_rows',lambda c:[])
+    w.save_config(db,'google',{'service_account_json':json.dumps(service_credentials())})
+    monkeypatch.setattr(w,'google_rows',fail)
+    w.enqueue(db,'google');w.enqueue(db,'bing');db.commit();w.run_due(db)
+    assert w.state(db,'google')['status']=='error' and w.state(db,'bing')['status']=='success'
+    assert db.query(GeoSearchDaily).count()==0
+
+
+@pytest.mark.parametrize('status,payload',[
+    (403,{'Message':'secret-not-for-display'}),(429,{}),(302,{}),
+    (200,{'d':None}),(200,{'d':[{'Date':'invalid'}]}),
+    (200,{'d':[{'Date':date.today().isoformat(),'Query':w.ORIGIN+'/','Clicks':2,'Impressions':1}]}),
+])
+def test_bing_bad_responses_rejected(monkeypatch,status,payload):
+    class Fake:
+        def __init__(self,**kw):pass
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+        def get(self,*args,**kw):return httpx.Response(status,json=payload)
+    monkeypatch.setattr(w.httpx,'Client',Fake)
+    with pytest.raises(w.WebmasterError) as exc:w.bing_rows({'api_key':'test-key-1234567890'})
+    assert 'secret' not in str(exc.value)
+
+
+def test_bing_daily_schedule_throttles_and_retains_imports(db,monkeypatch):
+    from datetime import datetime,timezone
+    w.save_config(db,'bing',{'api_key':'bing-key-1234567890','auto_sync':True})
+    day=date.today().isoformat()
+    w.store_rows(db,'bing',[w.row_values({'day':day,'page':w.ORIGIN+'/manual','clicks':1,'impressions':3})],'manual_report','真实报表')
+    calls=[]
+    def collect(c):
+        calls.append(True)
+        return [w.row_values({'day':day,'page':w.ORIGIN+'/api','clicks':2,'impressions':4})]
+    monkeypatch.setattr(w,'bing_rows',collect)
+    db.commit();w.run_due(db);w.run_due(db)
+    assert len(calls)==1
+    s=w.state(db,'bing')
+    s['started_at']=(datetime.now(timezone.utc)-timedelta(hours=25)).isoformat()
+    w.write(db,'state.bing',s);db.commit();w.run_due(db)
+    assert len(calls)==2
+    assert db.query(GeoSearchDaily).count()==2
+    assert db.query(GeoSearchDaily).filter_by(source='manual_report').count()==1

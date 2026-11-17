@@ -168,8 +168,17 @@ def test_owner_publish_search_preview_and_admin(db,client,monkeypatch,tmp_path):
         google.get_by_role('button',name='保存Google Search Console配置',exact=True).click()
         expect(page.locator('.webmaster [role="status"]')).to_contain_text('配置已保存')
         assert 'content="browser-google-verification"' in client.get('/').text
-        expect(google.get_by_role('button',name='同步Google搜索表现')).to_be_disabled()
+        expect(google.get_by_role('button',name='同步Google Search Console搜索表现')).to_be_disabled()
         bing=page.locator('.channel').filter(has=page.get_by_role('heading',name='Bing Webmaster Tools',exact=True))
+        bing.get_by_text('配置Bing搜索表现自动同步',exact=True).click()
+        bing.get_by_label('Bing API Key',exact=True).fill('browser-bing-key-1234567890')
+        bing.get_by_label('每天自动同步最近30天内的返回数据',exact=True).check()
+        bing.get_by_role('button',name='保存Bing Webmaster Tools配置',exact=True).click()
+        expect(page.locator('.webmaster [role="status"]')).to_contain_text('配置已保存')
+        expect(bing.get_by_label('Bing API Key',exact=True)).to_have_value('')
+        bing.get_by_role('button',name='同步Bing Webmaster Tools搜索表现',exact=True).click()
+        expect(page.locator('.webmaster [role="status"]')).to_contain_text('已加入独立同步队列')
+        expect(bing.get_by_role('button',name='同步Bing Webmaster Tools搜索表现',exact=True)).to_be_disabled()
         bing.get_by_text('导入Bing Webmaster Tools搜索表现报表',exact=True).click()
         bing.get_by_label('报表来源说明').fill('Bing站长真实报表浏览器验收')
         from datetime import date
