@@ -121,7 +121,12 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'costs',
         name: 'Costs',
-        component: () => import('@/views/costs/CostsView.vue'),
+        redirect: '/subscription',
+      },
+      {
+        path: 'subscription',
+        name: 'Subscription',
+        component: () => import('@/views/costs/SubscriptionView.vue'),
       },
       {
         path: 'members',

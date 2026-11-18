@@ -20,6 +20,10 @@
       </AppEmpty>
     </AppCard>
 
+    <AppCard v-else-if="!hotelAvailable">
+      <AppEmpty :icon="BusinessOutline" title="当前行业暂无可用连接器" description="连接器根据工作区行业展示，后续将陆续接入更多平台。您仍可使用其他数字员工和内容运营功能。" />
+    </AppCard>
+
     <div v-else-if="connector" class="connector-stack">
       <AppCard class="connector-card">
         <!-- (a) status header -->
@@ -249,7 +253,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   NButton,
@@ -300,6 +304,8 @@ const loading = ref(true)
 const forbidden = ref(false)
 const loadError = ref<string | null>(null)
 const connector = ref<HotelConnector | null>(null)
+const hotelAvailable = ref(false)
+let loadGeneration = 0
 
 // Form
 const form = reactive<{ hotelNum: number | null; token: string }>({ hotelNum: null, token: '' })
@@ -442,22 +448,44 @@ function applyConnector(data: HotelConnector) {
 }
 
 async function loadConnector() {
-  const res = await connectorsApi.getHotel(companyId.value)
+  const workspace = companyId.value
+  const generation = loadGeneration
+  const res = await connectorsApi.getHotel(workspace)
+  if (workspace !== companyId.value || generation !== loadGeneration) return
   applyConnector(res.data)
+  return res.data
 }
 
 async function loadAll() {
+  const generation = ++loadGeneration
+  const workspace = companyId.value
+  stopPolling()
+  showDddLogin.value = false
+  connector.value = null
+  hotelAvailable.value = false
+  jobs.value = []
+  orders.value = []
+  ordersTotal.value = 0
+  ordersPage.value = 1
+  testResult.value = null
   loading.value = true
   loadError.value = null
   forbidden.value = false
   try {
-    await loadConnector()
-    await Promise.all([loadJobs(), connector.value?.configured ? loadOrders() : Promise.resolve()])
+    if (!workspace) return
+    const catalog = await connectorsApi.list(workspace)
+    if (generation !== loadGeneration) return
+    hotelAvailable.value = catalog.data.connectors.some(item => item.provider === 'dingdanlaile')
+    if (!hotelAvailable.value) return
+    const loaded = await loadConnector()
+    if (generation !== loadGeneration) return
+    await Promise.all([loadJobs(), loaded?.configured ? loadOrders() : Promise.resolve()])
   } catch (e) {
+    if (generation !== loadGeneration) return
     if (apiErrorStatus(e) === 403) forbidden.value = true
     else loadError.value = errorText(e, t('Failed to load connector settings.'))
   } finally {
-    loading.value = false
+    if (generation === loadGeneration) loading.value = false
   }
 }
 
@@ -535,8 +563,11 @@ async function startSync() {
 }
 
 async function loadJobs() {
+  const workspace = companyId.value
+  const generation = loadGeneration
   const wasActive = jobActive.value
-  const res = await connectorsApi.listSyncJobs(companyId.value, 10)
+  const res = await connectorsApi.listSyncJobs(workspace, 10)
+  if (workspace !== companyId.value || generation !== loadGeneration) return
   jobs.value = res.data
   if (jobActive.value) {
     startPolling()
@@ -571,19 +602,22 @@ function stopPolling() {
 }
 
 async function loadOrders() {
+  const workspace = companyId.value
+  const generation = loadGeneration
   ordersLoading.value = true
   ordersError.value = null
   try {
-    const res = await connectorsApi.listOrders(companyId.value, {
+    const res = await connectorsApi.listOrders(workspace, {
       limit: PAGE_SIZE,
       offset: (ordersPage.value - 1) * PAGE_SIZE,
     })
+    if (workspace !== companyId.value || generation !== loadGeneration) return
     orders.value = res.data.orders
     ordersTotal.value = res.data.count
   } catch (e) {
-    ordersError.value = errorText(e, t('Failed to load synced orders.'))
+    if (workspace === companyId.value && generation === loadGeneration) ordersError.value = errorText(e, t('Failed to load synced orders.'))
   } finally {
-    ordersLoading.value = false
+    if (workspace === companyId.value && generation === loadGeneration) ordersLoading.value = false
   }
 }
 
@@ -635,7 +669,8 @@ const orderColumns = computed<DataTableColumns<HotelOrder>>(() => [
 ])
 
 onMounted(loadAll)
-onBeforeUnmount(stopPolling)
+watch(companyId, loadAll)
+onBeforeUnmount(() => { loadGeneration++; stopPolling() })
 </script>
 
 <style scoped>

@@ -160,6 +160,13 @@ def test_full_approved_chain_creates_video_without_live_calls(client, db, monkey
     from app.models.video_project import VideoProject
     user=create_test_user(db,email='chain@example.com')
     company=create_test_company(db,user,slug='chain')
+    # TestClient runs response background jobs; keep those jobs on the isolated DB.
+    def execute_background(task_id):
+        from app.core.tenant_context import TenantContext
+        from app.core.permissions import get_user_permissions
+        AgentRuntime(db).execute_task(task_id, TenantContext(
+            user, company.id, get_user_permissions(user.id, company.id, db)))
+    monkeypatch.setattr('app.services.task_dispatch._execute_inline', execute_background)
     from tests.test_asset_intelligence import make_asset
     for image_index in range(12):
         make_asset(db,company,user,f'酒店环境{image_index}','landscape',[],'酒店真实山景')
@@ -186,7 +193,7 @@ def test_full_approved_chain_creates_video_without_live_calls(client, db, monkey
         'title':'酒店曝光','task_type':'business_analysis','digital_employee_id':manager['id'],
         'input_params':{'goal':'提升抖音酒店曝光'}})
     assert response.status_code==201,response.text
-    current=response.json()
+    current=client.get(f"/api/v1/companies/{company.id}/tasks/{response.json()['id']}",headers=headers).json()
     for expected_role in ('operations_manager','content_planner','video_producer'):
         assert current['output']['role']==expected_role
         assert current['output']['mode']=='llm'

@@ -132,6 +132,7 @@
         <ModelSettings v-if="activeTab === 'models'" />
         <GeoAdmin v-if="activeTab === 'geo'" />
         <IndustryTemplates v-if="activeTab === 'industries'" />
+        <PaymentSettings v-if="activeTab === 'payments'" />
       </main>
     </div>
 
@@ -190,6 +191,7 @@ import {
 import ModelSettings from './ModelSettings.vue'
 import GeoAdmin from './GeoAdmin.vue'
 import IndustryTemplates from './IndustryTemplates.vue'
+import PaymentSettings from './PaymentSettings.vue'
 import AppBadge from '@/components/common/AppBadge.vue'
 import { useAuthStore } from '@/stores/auth'
 import apiClient from '@/api/client'
@@ -236,8 +238,9 @@ interface AdminCompany {
 const router = useRouter()
 const authStore = useAuthStore()
 
-const activeTab = ref<'overview' | 'users' | 'companies' | 'models' | 'industries' | 'geo'>('overview')
+const activeTab = ref<'overview' | 'users' | 'companies' | 'models' | 'industries' | 'geo' | 'payments'>('overview')
 const tabs = [
+  { key: 'payments' as const, label: '支付与订阅', icon: BusinessOutline },
   { key: 'geo' as const, label: 'GEO运营数据', icon: BusinessOutline },
   { key: 'models' as const, label: '大模型配置', icon: BarChartOutline },
   { key: 'industries' as const, label: '行业模板', icon: BusinessOutline },

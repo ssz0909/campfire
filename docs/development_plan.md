@@ -1,5 +1,7 @@
 # Development Plan
 
+2026-11-18 增补：支付渠道、30天订阅与AI用量计量方案已实现于当前工作区，详细套餐、接入步骤、验收与上线限制见 [订阅支付方案](subscription-payments.md)。尚待生产部署、商户参数配置和真实交易验收；默认观察模式，不直接拦截存量客户。
+
 ## Overview
 
 Six sequential phases from platform foundation to a fully operational business loop. Each phase produces a deployable increment. External dependencies (real API credentials, WeChat account) are isolated to later phases so development can proceed with mocks.

@@ -143,7 +143,7 @@ def enrich(result, task, runtime, forbidden_words):
     response = asyncio.run(OpenAIProvider(config=config).complete([
         {'role': 'system', 'content': system},
         {'role': 'user', 'content': context_json if result['role'] == 'video_producer' else context_json[:70000]},
-    ], max_tokens=12000 if result['role'] == 'video_producer' else 4000))
+    ], billing_company_id=task.company_id, max_tokens=12000 if result['role'] == 'video_producer' else 4000))
     text = response.get('content') or ''
     if text.startswith('```'):
         text = text.split('\n', 1)[-1].rsplit('```', 1)[0].strip()
@@ -201,7 +201,7 @@ def enrich(result, task, runtime, forbidden_words):
                 action['goal'] = action['goal'].replace(str(word), '[禁用词已隐藏]')
                 action['title'] = action['title'].replace(str(word), '[禁用词已隐藏]')
     task.models_used = [response['model']]
-    task.actual_cost_cents = None  # Relay pricing is unknown; token usage is tracked separately.
+    task.actual_cost_cents = OpenAIProvider(config=config).estimate_cost_cents(response['model'], response['input_tokens'], response['output_tokens'])
     runtime._append_log(task, 'info', '已调用大模型生成岗位交付', {
         'model': response['model'], 'input_tokens': response['input_tokens'],
         'output_tokens': response['output_tokens'],

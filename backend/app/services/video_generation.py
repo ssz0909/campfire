@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor
 import httpx
+from fastapi import HTTPException
 from app.config import settings
 from app.database import SessionLocal
 from app.models.video_project import VideoProject, ProviderTask
@@ -223,6 +224,14 @@ def _generate_clip(db, project, client, request, shot_number=None):
             provider_name='relay',task_type='video_generation',status='pending',shot_number=shot_number,
             input_params=request.model_dump(), submitted_at=datetime.now(timezone.utc))
         db.add(task);db.commit()
+        from app.services.billing import reserve
+        try:
+            reserve(db, project.company_id, 'video:' + str(task.id), 'video', video_seconds=request.duration_seconds)
+        except HTTPException:
+            task.status = 'rejected'
+            task.error_message = '模型请求尚未提交：订阅或额度预留未通过，请处理后重新执行'
+            db.commit()
+            raise
         try:
             result = asyncio.run(client.submit_generation(request))
         except Exception as exc:
@@ -231,6 +240,8 @@ def _generate_clip(db, project, client, request, shot_number=None):
                 task.status = 'rejected'
             else:
                 task.status = 'submission_unknown'
+            from app.services.billing import finish
+            finish(db, 'video:' + str(task.id), 'release' if task.status == 'rejected' else 'unknown')
             task.error_message = str(exc) if isinstance(exc, ValueError) else '提交结果不确定，请核对中转后台任务'
             db.commit()
             raise
@@ -247,14 +258,21 @@ def _generate_clip(db, project, client, request, shot_number=None):
     remaining = settings.VIDEO_TIMEOUT_SECONDS - (datetime.now(timezone.utc)-submitted).total_seconds()
     deadline = time.monotonic() + remaining
     while result.status == 'processing':
-        if time.monotonic() >= deadline: raise ValueError('视频生成超时，请检查中转服务任务状态，勿重复提交')
+        if time.monotonic() >= deadline:
+            from app.services.billing import finish
+            finish(db, 'video:' + str(task.id), 'unknown')
+            raise ValueError('视频生成超时，请检查中转服务任务状态，勿重复提交')
         time.sleep(max(1,settings.VIDEO_POLL_SECONDS))
         result = asyncio.run(client.get_task_status(result.provider_task_id))
         task.status = result.status;task.output_url = result.output_url;db.commit()
         if result.status == 'failed':
             task.error_message = '模型服务返回生成失败'
             db.commit()
-    if result.status != 'completed': raise ValueError('视频生成失败，请检查中转服务任务详情')
+    from app.services.billing import finish
+    if result.status != 'completed':
+        finish(db, 'video:' + str(task.id), 'release')
+        raise ValueError('视频生成失败，请检查中转服务任务详情')
+    finish(db, 'video:' + str(task.id), 'settle', video_seconds=request.duration_seconds)
     project.project_status = 'compositing';db.commit()
     with httpx.Client(timeout=120,follow_redirects=True) as download:
         with download.stream('GET',result.output_url) as response:

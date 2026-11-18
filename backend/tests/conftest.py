@@ -38,6 +38,7 @@ def isolate_model_credentials(monkeypatch, db):
         yield db
 
     monkeypatch.setattr("app.services.model_settings.SessionLocal", model_session)
+    monkeypatch.setattr("app.services.billing.SessionLocal", model_session)
     # Unit tests must never call paid services using the developer's .env.
     from app.config import settings
     for name in ('LLM_BASE_URL', 'LLM_MODEL', 'LLM_API_KEY', 'VIDEO_BASE_URL', 'VIDEO_MODEL', 'VIDEO_API_KEY', 'EMBEDDING_BASE_URL', 'EMBEDDING_MODEL', 'EMBEDDING_API_KEY'):

@@ -1,5 +1,13 @@
 # 营火AI部署
 
+## 连接器行业展示与订阅代码归档（2026-11-18）
+
+发布目录 `/opt/campfire/releases/connector-industry-20261118T092057Z`，上一版本 `/opt/campfire/releases/billing-20261118T085120Z`。备份及回退脚本 `/opt/campfire/backups/before-connector-industry-20261118T092057Z/rollback.sh`，包含原发布目录、数据库、加密配置与Nginx。此次无需数据库迁移，回退仅切换应用，保留所有支付和业务数据。
+
+连接器目录由服务端按工作区行业返回，酒旅及历史酒店/景区别名显示订单来了，其他行业显示空状态且前端不加载酒店配置、同步任务及订单。后台注册表可扩展新平台。保留已有配置与历史订单，不将行业展示规则作为权限验证替代。
+
+139项连接器、支付账本、模型调用、视频重试和GEO等回归通过，前端类型检查及生产构建通过。切换前两次检查无活动任务，118个部署文件校验通过。本次一并归档此前已上线的支付与订阅源码，功能与商户启用边界见 `docs/subscription-payments.md`。
+
 品牌：营火AI · AI运营平台。宣传语：Always on, Always Growing。
 
 服务器：129.211.64.132；站点：https://campfire.dawoai.com。

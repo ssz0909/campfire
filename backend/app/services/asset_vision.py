@@ -12,7 +12,7 @@ from app.providers.llm.openai_provider import OpenAIProvider
 CATEGORIES = ('exterior','lobby','guest_room','bathroom','restaurant','breakfast','amenities','pool','meeting_room','staff','landscape','other')
 
 
-def analyze_image(content: bytes, mime_type: str) -> dict:
+def analyze_image(content: bytes, mime_type: str, company_id=None) -> dict:
     config = get_llm_settings()
     if not all(config.values()):
         return {'status':'skipped','detail':'未配置完整的视觉模型参数，已保留原素材'}
@@ -25,7 +25,7 @@ def analyze_image(content: bytes, mime_type: str) -> dict:
         {'role':'user','content':[{'type':'text','text':'识别这张图片素材，供按主题检索和视频选材。'},
                                   {'type':'image_url','image_url':{'url':data,'detail':'low'}}]},
     ]
-    response=asyncio.run(OpenAIProvider(config=config).complete(messages,max_tokens=500,temperature=0.1))
+    response=asyncio.run(OpenAIProvider(config=config).complete(messages,billing_company_id=company_id,max_tokens=500,temperature=0.1))
     raw=response['content'].strip()
     if raw.startswith('```'):
         raw=raw.split('\n',1)[-1].strip()

@@ -26,7 +26,7 @@ class Suggestions(BaseModel):
     faq_items: list[FAQSuggestion] = Field(max_length=20)
 
 
-async def generate(db, content):
+async def generate(db, content, company_id=None):
     # Only the editor's public fields are sent. No orders, credentials or private assets.
     evidence = {k: getattr(content, k) for k in ('name', 'industry', 'region', 'address', 'contact', 'description', 'services', 'faq')}
     evidence['confirmed_information'] = [f.model_dump(mode='json') for f in content.facts if f.status == 'confirmed']
@@ -42,7 +42,7 @@ async def generate(db, content):
 返回一个JSON对象，且只有：description字符串、service_items数组[{"name":"服务名","description":"具体服务及适用条件"}]、faq_items数组[{"question":"问题","answer":"基于已知事实的回答"}]。
 总共不超过6条服务和6条问答；每个模块合计不超过6000字。不要Markdown代码块。'''},
             {'role': 'user', 'content': json.dumps(evidence, ensure_ascii=False)},
-        ], max_tokens=3500, temperature=0.3), timeout=90)
+        ], billing_company_id=company_id, max_tokens=3500, temperature=0.3), timeout=90)
         if response.get('finish_reason') == 'length':
             raise HTTPException(502, 'AI返回内容被截断，请缩短资料后重试')
         raw=response['content'].strip()

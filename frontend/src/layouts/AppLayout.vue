@@ -246,7 +246,7 @@ const navItems = computed<NavItem[]>(() => [
   { to: '/analytics', label: t('Analytics'), icon: BarChartOutline },
   { to: '/connectors', label: t('Connectors'), icon: LinkOutline },
   { to: '/publishing', label: t('平台发布'), icon: ShareSocialOutline },
-  { to: '/costs', label: t('Costs'), icon: CardOutline },
+  { to: '/subscription', label: t('Subscription'), icon: CardOutline },
   { to: '/members', label: t('Members'), icon: PersonAddOutline },
   { to: '/settings', label: t('Settings'), icon: SettingsOutline },
   ...(authStore.user?.is_platform_admin
@@ -277,7 +277,7 @@ const routeTitleMap: Record<string, string> = {
   '/approvals': 'Approvals',
   '/analytics': 'Analytics',
   '/connectors': 'Connectors',
-  '/costs': 'Costs',
+  '/subscription': 'Subscription',
   '/members': 'Members',
   '/settings': 'Settings',
   '/admin': 'Platform Admin',

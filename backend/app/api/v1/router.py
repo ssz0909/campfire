@@ -43,3 +43,9 @@ router.include_router(geo.router, tags=["geo"])
 
 from app.api.v1 import webmaster
 router.include_router(webmaster.router)
+
+from app.api.v1 import payment_settings
+router.include_router(payment_settings.router)
+
+from app.api.v1 import billing
+router.include_router(billing.router)

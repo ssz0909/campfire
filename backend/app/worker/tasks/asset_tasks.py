@@ -114,7 +114,7 @@ def analyze_image_content(asset_id: str):
         from app.services import get_storage_service
         from app.services.asset_vision import analyze_image
         try:
-            analysis=analyze_image(get_storage_service().get_file(asset.file_key),asset.mime_type)
+            analysis=analyze_image(get_storage_service().get_file(asset.file_key),asset.mime_type,company_id=asset.company_id)
             db.refresh(asset)
             if asset.is_deleted:return {'status':'missing'}
             asset.asset_metadata={**(asset.asset_metadata or {}),'vision_analysis':analysis}

@@ -21,6 +21,9 @@ export interface DddStore {id: string; ntw_num: string; name: string | null; ver
 export interface DddLoginResult {verification_required: boolean; stores: DddStore[]}
 
 export const connectorsApi = {
+  list(companyId: string): Promise<{data: {connectors: {type: string; provider: string; name: string; industries: string[]}[]}}> {
+    return apiClient.get(`/companies/${companyId}/connectors`)
+  },
   dddSelectStore(companyId: string, ntw_id: string): Promise<{data: HotelConnector}> {
     return apiClient.post(`${base(companyId)}/ddd-store`, {ntw_id})
   },

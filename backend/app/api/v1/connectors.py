@@ -15,6 +15,8 @@ from app.core.permissions import Permission, require_permission
 from app.database import SessionLocal, get_db
 from app.models.audit_log import AuditLog
 from app.models.user import User
+from app.models.company import Company
+from app.services.connector_catalog import available_connectors
 
 router = APIRouter()
 
@@ -67,17 +69,15 @@ def list_connectors(
     _: User = Depends(require_permission(Permission.CONNECTOR_VIEW)),
     db: Session = Depends(get_db),
 ):
-    summary = HotelConnectorService(company_id, db).masked_config_summary()
-    return {
-        "connectors": [
-            {
-                "type": "hotel",
-                "provider": "dingdanlaile",
-                "status": summary.get("status"),
-                "last_sync_at": summary.get("last_sync_at"),
-            }
-        ]
-    }
+    company = db.get(Company, company_id)
+    if company is None:
+        raise HTTPException(404, "工作区不存在")
+    items = available_connectors(company.industry)
+    for item in items:
+        if item['provider'] == 'dingdanlaile':
+            summary = HotelConnectorService(company_id, db).masked_config_summary()
+            item.update(status=summary.get('status'), last_sync_at=summary.get('last_sync_at'))
+    return {"connectors": items}
 
 
 @router.get("/{company_id}/connectors/hotel")

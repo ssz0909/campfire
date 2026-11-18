@@ -132,7 +132,7 @@ def preview_unsaved(company_id:uuid.UUID,data:Content,_:User=Depends(require_per
 async def ai_draft(company_id:uuid.UUID,data:Content,request:Request,_:User=Depends(require_permission(Permission.COMPANY_EDIT)),db:Session=Depends(get_db)):
     service.public_limit(request,3)
     from app.services.geo_writing import generate
-    return await generate(db,data)
+    return await generate(db,data,company_id=company_id)
 
 @router.put('/companies/{company_id}/geo/draft')
 def draft(company_id:uuid.UUID,data:Draft,user:User=Depends(require_permission(Permission.COMPANY_EDIT)),db:Session=Depends(get_db)):
