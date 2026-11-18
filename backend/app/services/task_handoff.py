@@ -21,6 +21,9 @@ def create_handoffs(db, parent):
         role = action.get('role')
         if role not in allowed or role in seen:
             continue
+        if role == 'video_producer' and (parent.output or {}).get('video_brief', {}).get('feasible') is False:
+            skipped.append({'role': role, 'reason': parent.output['video_brief']['capacity_note']})
+            continue
         seen.add(role)
         employee = db.query(DigitalEmployee).filter_by(company_id=parent.company_id,
             role_title=role, is_deleted=False, is_active=True).order_by(DigitalEmployee.created_at).first()
@@ -36,7 +39,11 @@ def create_handoffs(db, parent):
         child.input_params = {**child.input_params, **child_params(parent)}
         if role in ('content_planner', 'video_producer'):
             from app.services.video_director import target_duration
-            child.input_params = {**child.input_params, 'target_duration_seconds':target_duration(parent.input_params, (parent.input_params or {}).get('execution_goal') or (parent.input_params or {}).get('goal') or parent.title)}
+            from app.services.video_capacity import task_duration_request
+            request = task_duration_request(db, parent)
+            brief = (parent.output or {}).get('video_brief') or {}
+            child.input_params = {**child.input_params, 'video_duration_request': request,
+                'target_duration_seconds': brief.get('target_duration_seconds') or target_duration(parent.input_params, (parent.input_params or {}).get('execution_goal') or (parent.input_params or {}).get('goal') or parent.title)}
         period = ((parent.output or {}).get('data_sources', {}).get('hotel') or {}).get('period')
         if period and len(period) == 2:
             child.input_params = {**child.input_params, 'date_from': period[0], 'date_to': period[1]}
@@ -65,7 +72,8 @@ def create_video_handoff(db, task):
         else:
             from app.services.industry_templates import ensure_task_snapshot
             selected=select_assets_for_video(db,task.company_id,goal,template=ensure_task_snapshot(db, task),
-                rotation_key=str(task.id),exclude_task_id=task.id,require_people_opening=people_opening)
+                rotation_key=str(task.id),exclude_task_id=task.id,require_people_opening=people_opening,
+                aspect_ratio=(task.input_params or {}).get('aspect_ratio', '9:16'))
         from app.services.video_director import validate_plan, fallback_plan, target_duration
         duration = target_duration((task.output or {}).get('video_brief') or task.input_params, goal)
         generation_mode = (task.input_params or {}).get('generation_mode', 'quality')
@@ -90,7 +98,8 @@ def create_video_handoff(db, task):
         project = VideoProject(company_id=task.company_id, created_by=task.created_by,
             digital_employee_id=task.digital_employee_id, task_id=task.id, title=task.title,
             creation_mode='prompt_to_video', marketing_goal=(task.input_params or {}).get('goal'),
-            script=(task.output or {}).get('video_script') or (task.output or {}).get('report_markdown'), aspect_ratio='9:16',
+            script=(task.output or {}).get('video_script') or (task.output or {}).get('report_markdown'),
+            aspect_ratio=(task.input_params or {}).get('aspect_ratio', '9:16'),
             target_duration_seconds=duration, storyboard=plan, project_status='draft',**music)
         project.generation_mode = generation_mode
         project.reuse_policy = (task.input_params or {}).get('reuse_policy', 'fresh')

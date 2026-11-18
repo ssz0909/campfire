@@ -17,7 +17,7 @@
           <BulbOutline class="mode-card__icon" aria-hidden="true" />
           <h3 class="mode-card__title">{{ t('AI Creative') }}</h3>
           <p class="mode-card__desc">
-            {{ t('输入视频描述或脚本，由配置的视频模型生成整片。') }}
+            {{ t('输入视频描述或脚本，AI将自动制作视频。') }}
           </p>
           <AppBadge color="brand">{{ t('Recommended') }}</AppBadge>
         </button>
@@ -63,6 +63,7 @@
           <n-form-item label="成片时长（15至60秒）">
             <n-select v-model:value="form.target_duration_seconds" :options="[15,20,30,45,60].map(value=>({label:value+'秒',value}))" />
           </n-form-item>
+          <n-form-item label="画面比例"><n-select v-model:value="form.aspect_ratio" :options="aspectRatioOptions" /></n-form-item>
           <n-form-item label="行业创作模板"><IndustryTemplatePicker v-model="industryOverride" /></n-form-item>
           <n-form-item label="视频生成策略">
             <n-select v-model:value="form.generation_mode" :options="[{label:'质量优先（现有逐镜生成）',value:'quality'},{label:'成本优先（5秒一段，段内1–2镜）',value:'cost'}]" />
@@ -70,7 +71,7 @@
           <n-form-item label="分镜素材使用策略">
             <n-select v-model:value="form.reuse_policy" :options="[{label:'优先复用已审核分镜，不足时生成',value:'prefer_reuse'},{label:'全部重新生成',value:'fresh'},{label:'仅使用已有分镜，不调用视频模型',value:'reuse_only'}]" />
           </n-form-item>
-          <p v-if="form.generation_mode === 'cost'" class="create-hint">预计 {{ Math.ceil(form.target_duration_seconds / 5) }} 次调用，每次生成5秒，成片 {{ form.target_duration_seconds }} 秒。当前接口使用单张首帧，每段设计同一场景的1–2个景别；内部切镜由模型执行，需审核效果。至少选择 {{ Math.ceil(form.target_duration_seconds / 5) }} 张不同图片。</p>
+          <p v-if="form.generation_mode === 'cost'" class="create-hint">按5秒片段制作 {{ form.target_duration_seconds }} 秒成片，每段包含同场景的1–2个景别。至少选择 {{ Math.ceil(form.target_duration_seconds / 5) }} 张不同图片。</p>
           <template v-if="form.creation_mode === 'ai_creative'">
             <n-form-item v-if="form.generation_mode === 'cost'" label="成本优先参考图片">
               <n-select v-model:value="form.selected_asset_ids" :options="videoAssetOptions" multiple filterable clearable />
@@ -128,6 +129,7 @@
 
 <script setup lang="ts">
 import { ref, computed, reactive, onMounted } from 'vue'
+import { aspectRatioOptions, type AspectRatio } from '@/constants/videoOptions'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { NButton, NForm, NFormItem, NInput, NSelect, NSwitch, type FormInst, type FormRules } from 'naive-ui'
@@ -163,6 +165,7 @@ const form = reactive({
   reference_asset_id: null as string | null,
   selected_asset_ids: [] as string[],
   target_duration_seconds: 30,
+  aspect_ratio: '9:16' as AspectRatio,
   music_asset_id: null as string|null,
   music_volume: 0.25,
   music_disabled: false,
@@ -210,7 +213,7 @@ async function handleCreate() {
       script: form.script || undefined,
       reference_asset_id: form.reference_asset_id ?? undefined,
       selected_asset_ids: form.selected_asset_ids,
-      aspect_ratio: '9:16',
+      aspect_ratio: form.aspect_ratio,
       target_duration_seconds: form.target_duration_seconds,
       music_disabled: form.music_disabled,
       music_asset_id: form.music_disabled ? null : form.music_asset_id,

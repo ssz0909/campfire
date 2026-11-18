@@ -148,6 +148,17 @@ def test_execution_endpoint_tenant_scope(client,db):
 
 
 def test_full_chain_from_manager_through_feedback_approval(client,db,monkeypatch):
+    # Inline descendants must use the same isolated DB as the API fixture.
+    def execute_background(task_id):
+        from app.agent.runtime import AgentRuntime
+        from app.core.tenant_context import TenantContext
+        from app.core.permissions import get_user_permissions
+        from app.models.user import User
+        task = db.get(OperationTask, task_id)
+        user = db.get(User, task.created_by)
+        AgentRuntime(db).execute_task(task_id, TenantContext(
+            user, task.company_id, get_user_permissions(user.id, task.company_id, db)))
+    monkeypatch.setattr('app.services.task_dispatch._execute_inline', execute_background)
     user,company,_=setup(db)
     from tests.test_asset_intelligence import make_asset
     for image_index in range(12):
@@ -162,7 +173,8 @@ def test_full_chain_from_manager_through_feedback_approval(client,db,monkeypatch
     response=client.post(base+'/tasks',headers=headers,json={'title':'本年经营分析并执行','task_type':'business_analysis',
         'digital_employee_id':str(manager.id),'input_params':{'goal':'分析本年度并执行','execution_loop':True,'publish_platforms':['douyin','wechat_channels']}})
     assert response.status_code==201,response.text
-    current=response.json();root_id=current['id']
+    root_id=response.json()['id']
+    current=client.get(base+f'/tasks/{root_id}',headers=headers).json()
     for role in ('operations_manager','data_analyst','content_planner','video_producer'):
         assert current['output']['role']==role
         response=client.post(base+f"/approvals/{current['output']['approval_id']}/approve",headers=headers,json={})

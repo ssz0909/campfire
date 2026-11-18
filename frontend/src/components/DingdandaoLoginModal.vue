@@ -17,7 +17,7 @@
       <n-button type="primary" :disabled="!selected" :loading="loading" @click="bind">连接所选门店</n-button>
     </template>
     <p v-if="error" class="notice notice--fail" role="alert">{{ error }}</p>
-    <p class="muted" style="margin-top: 16px">密码仅由后端用于登录，不保存密码；会话加密保存在服务端，用于读取所选门店数据。</p>
+    <p class="muted" style="margin-top: 16px">密码仅用于本次登录，不会保存。连接后可同步所选门店的数据。</p>
   </n-modal>
 </template>
 <script setup lang="ts">

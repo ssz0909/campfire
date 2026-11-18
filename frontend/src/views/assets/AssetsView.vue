@@ -21,7 +21,6 @@
       hint="支持图片、视频、MP3/WAV音乐及文档"
       @files="handleUpload"
     />
-    <p class="vision-hint">上传图片后会用 .env 配置的视觉大模型识别画面、类别和主题标签，可能产生模型用量；未配置视觉能力时可手动补标签或重试。</p>
 
     <!-- Upload progress -->
     <div v-if="uploads.length" class="upload-progress" role="status" :aria-label="t('Upload progress')">
@@ -203,7 +202,7 @@ async function loadAssets() {
 }
 function editAsset(asset:Asset){editingAsset.value=asset;editCategory.value=asset.category||null;editTags.value=(asset.tags||[]).join(',');editDescription.value=asset.source_description||asset.metadata?.vision_analysis?.visual_description||'';showEdit.value=true}
 async function saveAsset(){if(!editingAsset.value)return;editBusy.value=true;try{const result=await assetsApi.update(companyId.value,editingAsset.value.id,{category:editCategory.value||undefined,tags:editTags.value.split(/[,，]/).map(x=>x.trim()).filter(Boolean),source_description:editDescription.value});Object.assign(editingAsset.value,result.data);showEdit.value=false;message.success('素材信息已保存')}catch{message.error('保存素材信息失败')}finally{editBusy.value=false}}
-async function analyzeAsset(asset:Asset){try{const result=await assetsApi.analyze(companyId.value,asset.id);Object.assign(asset,result.data);message.success('图片识别完成')}catch(e:any){message.error(e.response?.data?.detail||'图片识别失败，请检查视觉模型配置')}}
+async function analyzeAsset(asset:Asset){try{const result=await assetsApi.analyze(companyId.value,asset.id);Object.assign(asset,result.data);message.success('图片识别完成')}catch(e:any){message.error(e.response?.data?.detail||'图片识别暂未完成，请稍后重试')}}
 
 async function handleUpload(files: File[]) {
   const uploadedTypes=new Set<string>()

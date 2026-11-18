@@ -46,8 +46,7 @@
       </div>
       <p v-if="asset.category" class="asset-card__description">{{ categoryName(asset.category) }} · {{ asset.source_description }}</p>
       <p v-if="['pending','running'].includes(asset.metadata?.vision_analysis?.status || '')" class="asset-card__description">图片内容识别中…</p>
-      <p v-if="asset.metadata?.vision_analysis?.detail" class="asset-card__description">{{ asset.metadata.vision_analysis.detail }}</p>
-      <p v-else-if="asset.metadata?.vision_analysis?.error" class="asset-card__description">{{ asset.metadata.vision_analysis.error }}</p>
+      <p v-if="['skipped','failed'].includes(asset.metadata?.vision_analysis?.status || '') || asset.metadata?.vision_analysis?.error" class="asset-card__description">图片暂未完成识别，可重新识别或手动编辑标签。</p>
     </div>
     <div class="asset-card__actions">
       <n-button v-if="asset.asset_type === 'image'" size="tiny" quaternary @click.stop="openRegenerate()">生成分镜</n-button>

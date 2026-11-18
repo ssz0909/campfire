@@ -40,6 +40,8 @@ def resolve_music_settings(db, company_id, overrides=None):
         if not candidates:
             raise HTTPException(422,'已启用随机配乐，但素材库暂无可用音频，请上传音乐或关闭随机配乐')
         selected={**defaults,'music_asset_id':random.choice(candidates)[0]}
+    if not explicit and defaults.get('selection_mode') == 'model':
+        selected={'music_disabled':False, 'music_asset_id':None}
     data=MusicSettings.model_validate(selected)
     music_asset(db,company_id,data.music_asset_id)
     return data.model_dump()
@@ -65,6 +67,8 @@ def set_default_music(db, company_id, data):
     mode = getattr(data, 'selection_mode', 'fixed')
     if mode == 'none':
         data = data.model_copy(update={'music_asset_id': None, 'music_disabled': True})
+    elif mode == 'model':
+        data = data.model_copy(update={'music_asset_id': None, 'music_disabled': False})
     elif mode in ('fixed', 'random'):
         data = data.model_copy(update={'music_disabled': False})
     if mode == 'fixed':

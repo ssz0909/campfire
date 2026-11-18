@@ -19,7 +19,7 @@ CATEGORY_TERMS={
 }
 
 
-def select_assets_for_video(db,company_id,goal,limit=40,template=None,rotation_key=None,exclude_task_id=None,require_people_opening=None):
+def select_assets_for_video(db,company_id,goal,limit=40,template=None,rotation_key=None,exclude_task_id=None,require_people_opening=None,aspect_ratio='9:16'):
     from app.services.video_requirements import requires_people_opening
     from app.services.video_motion import people_visible
     required = requires_people_opening(goal) if require_people_opening is None else require_people_opening
@@ -58,11 +58,13 @@ def select_assets_for_video(db,company_id,goal,limit=40,template=None,rotation_k
                           ' '.join(asset.tags or []), ' '.join(CATEGORY_TERMS.get(asset.category, ())) ]).casefold()
         # Industry is a tie-breaker only; the user's subject always ranks first.
         industry_score = min(0.5, sum(0.1 for word in hints if word.casefold() in facts))
-        # Avoid tiny images and reward portrait-ready sources. Keep unmeasured
+        # Avoid tiny images and reward sources matching the target frame. Keep unmeasured
         # assets usable but rank measured, adequate images ahead of them.
         width,height=asset.width or 0,asset.height or 0
         if width and height and min(width,height)<320:continue
-        quality=(2 if min(width,height)>=720 else 0)+(1 if height>width else 0)
+        target_ratio = {'9:16':9/16, '16:9':16/9, '1:1':1}[aspect_ratio]
+        fit = min((width/height)/target_ratio, target_ratio/(width/height)) if width and height else 0
+        quality=(2 if min(width,height)>=720 else 0)+fit
         # A repeat is allowed when relevance is materially stronger, but a
         # recent source should lose to a comparable unused candidate.
         repeat_penalty = min(4, recent.get(str(asset.id), 0)) * 1.25

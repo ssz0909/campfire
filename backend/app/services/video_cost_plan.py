@@ -7,6 +7,7 @@ import math
 from typing import Literal
 
 from pydantic import BaseModel, Field
+from app.services.video_capacity import COST_SEGMENT_SECONDS, minimum_images
 
 
 COST_DIRECTOR_PROMPT = '''你是通用短视频导演，按企业档案和任务主题制作，当前选择成本优先。成片时长遵守video_brief.target_duration_seconds（15至60秒）。
@@ -44,7 +45,7 @@ class CostShot(BaseModel):
 def cost_plan(assets, duration=30):
     if not isinstance(duration, (int, float)) or not math.isfinite(duration) or not 15 <= duration <= 60:
         raise ValueError('成本优先成片时长必须为15至60秒')
-    count = math.ceil(duration / 5)
+    count = minimum_images(duration, 'cost')
     from app.services.video_requirements import opening_first
     assets = opening_first(assets)
     unique = list({str(a['id']): a for a in assets}.values())
@@ -86,7 +87,7 @@ def validate_cost_plan(plan, assets, duration):
     if not isinstance(plan, list):
         raise ValueError('成本优先分镜必须为数组')
     allowed = {str(a['id']) for a in assets}
-    if len(plan) != math.ceil(duration / 5):
+    if len(plan) != minimum_images(duration, 'cost'):
         raise ValueError('成本优先片段数量必须等于成片时长除以5后向上取整')
     from app.services.video_requirements import validate_opening
     validate_opening(plan, assets)
@@ -98,7 +99,7 @@ def validate_cost_plan(plan, assets, duration):
         if source not in allowed or source in used:
             raise ValueError('成本优先片段引用素材缺失或重复')
         used.add(source)
-        seconds = min(5, duration - index * 5)
+        seconds = min(COST_SEGMENT_SECONDS, duration - index * COST_SEGMENT_SECONDS)
         if abs(shot['duration_seconds'] - seconds) > 0.01:
             raise ValueError('成本优先片段时长不正确')
         views = shot.get('subshots') or []

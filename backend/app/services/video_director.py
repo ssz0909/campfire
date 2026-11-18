@@ -1,8 +1,8 @@
 """Validated editorial plans: edit timing is separate from billable model timing."""
 import math
-import re
 from typing import Literal
 from pydantic import BaseModel, Field
+from app.services.video_capacity import QUALITY_MIN_SHOTS, QUALITY_OPENING_MAX, QUALITY_SHOT_MAX
 
 
 DIRECTOR_PROMPT = '''你是通用短视频导演和剪辑师，服务不同领域的企业与创作者。先选材和设计节奏，再输出结构化分镜。
@@ -36,7 +36,7 @@ DIRECTOR_PROMPT += DIRECTOR_MOTION_RULES
 
 class DirectorShot(BaseModel):
     source_asset_id: str
-    duration_seconds: float = Field(ge=1.5, le=3.5, allow_inf_nan=False)
+    duration_seconds: float = Field(ge=1.5, le=QUALITY_SHOT_MAX, allow_inf_nan=False)
     purpose: str = Field(min_length=1, max_length=200)
     framing: str = Field(pattern=r'^(wide|medium|detail)$')
     camera_movement: str = Field(min_length=1, max_length=160)
@@ -52,26 +52,20 @@ class DirectorShot(BaseModel):
 
 
 def target_duration(params=None, goal=''):
-    value = (params or {}).get('target_duration_seconds')
-    if value is None:
-        match = re.search(r'(\d+(?:\.\d+)?)\s*(秒|[sS]\b|分钟|分|[mM][iI][nN]\b)', goal or '')
-        value = float(match[1]) * (60 if match[2].lower() in ('分钟', '分', 'min') else 1) if match else 30
-    value = float(value)
-    if not math.isfinite(value) or not 15 <= value <= 60:
-        raise ValueError('视频制作员的成片时长必须为15至60秒')
-    return round(value)
+    from app.services.video_capacity import duration_request
+    return duration_request(params, goal)['max_seconds']
 
 
 def validate_plan(shots, assets, duration, *, allow_legacy_reuse=False):
     allowed = {str(a['id']) for a in assets}
-    if not 5 <= len(shots) <= 40:
+    if not QUALITY_MIN_SHOTS <= len(shots) <= 40:
         raise ValueError('分镜需包含5至40个短镜头，以覆盖15至60秒成片')
     plan = [DirectorShot.model_validate(s).model_dump() for s in shots]
     from app.services.video_requirements import validate_opening
     validate_opening(plan, assets)
     if abs(sum(s['duration_seconds'] for s in plan) - duration) > 0.05:
         raise ValueError('分镜时长之和与目标成片时长不一致，请重新生成脚本')
-    if plan[0]['duration_seconds'] > 2:
+    if plan[0]['duration_seconds'] > QUALITY_OPENING_MAX:
         raise ValueError('开头钩子镜头不得超过2秒')
     if any(s['source_asset_id'] not in allowed for s in plan):
         raise ValueError('分镜引用了候选池之外的素材，已停止制作')
@@ -129,10 +123,11 @@ def fallback_plan(assets, duration=30):
         raise ValueError('缺少已识别且可用的图片素材，请上传素材后再制作')
     from app.services.video_requirements import opening_first
     assets = opening_first(assets)
-    minimum = max(5, 1 + math.ceil((duration - 2) / 3.5))
+    from app.services.video_capacity import minimum_images
+    minimum = minimum_images(duration)
     if len(assets) < minimum:
         raise ValueError(f'制作{duration}秒且不重复素材至少需要{minimum}张不同图片，当前仅{len(assets)}张，请补充素材')
-    count = min(len(assets), max(6, math.ceil(duration / 2.5)))
+    count = min(len(assets), max(minimum, 6, math.ceil(duration / 2.5)))
     remaining = duration - 2
     plan = []
     for i in range(count):

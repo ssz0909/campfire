@@ -59,6 +59,7 @@
       <AppCard v-if="project.industry_template_snapshot">行业模板：{{ project.industry_template_snapshot.name }} · v{{ project.industry_template_snapshot.version }}。已固定本次配置，重新执行沿用此版本。</AppCard>
       <AppCard class="generation-mode-card">
         <strong>视频生成策略：</strong>{{ project.generation_mode === 'cost' ? '成本优先' : '质量优先' }}
+        <span> · 画面比例 {{ project.aspect_ratio }}</span>
         <span> · {{ {fresh:'全部重新生成',prefer_reuse:'优先复用，不足补生成',reuse_only:'仅用已有分镜，不调用视频模型'}[project.reuse_policy || 'fresh'] }}</span>
         <span v-if="project.generation_mode === 'cost'"> · 预计 {{ Math.ceil((project.target_duration_seconds || 30) / 5) }} 次模型调用，每次生成5秒后拼接</span>
         <span v-else> · 按结构化分镜逐镜生成</span>
@@ -277,7 +278,7 @@ async function startProject() {
   try {
     const res = await (project.value.status === 'failed' ? videoProjectsApi.retry : videoProjectsApi.start)(companyId.value, project.value.id)
     project.value = res.data
-  } catch(e: any) { actionError.value = e.response?.data?.detail || '启动失败，请检查模型配置'
+  } catch(e: any) { actionError.value = e.response?.data?.detail || '启动失败，请稍后重试'
   } finally {
     actionLoading.value = false
   }

@@ -20,11 +20,12 @@
           <n-select v-model:value="timing" :options="timingOptions" :disabled="!!route.query.parent_task_id" />
         </n-form-item>
         <n-form-item label="行业创作模板"><IndustryTemplatePicker v-model="industryOverride" /></n-form-item>
+        <n-form-item label="画面比例（用于本任务及后续视频制作）"><n-select v-model:value="aspectRatio" :options="aspectRatioOptions" /></n-form-item>
         <n-form-item label="视频生成策略（用于本任务及后续视频制作）"><n-select v-model:value="generationMode" :options="[{label:'质量优先（现有逐镜生成）',value:'quality'},{label:'成本优先（5秒一段，段内1–2镜）',value:'cost'}]" /></n-form-item>
-        <p v-if="generationMode === 'cost'" class="hint">15秒视频预计调用3次，每次生成5秒；每段用一张参考图设计同场景1–2个景别，再后期拼接。内部切镜由视频模型执行，需审核效果。</p>
+        <p v-if="generationMode === 'cost'" class="hint">按5秒片段制作，每段包含同场景的1–2个景别，完成后拼接成片。</p>
         <n-form-item label="分镜素材使用策略"><n-select v-model:value="reusePolicy" :options="[{label:'优先复用已审核分镜，不足时生成',value:'prefer_reuse'},{label:'全部重新生成',value:'fresh'},{label:'仅使用已有分镜，不调用视频模型',value:'reuse_only'}]" /></n-form-item>
         <n-form-item label="本任务的视频配乐">
-          <n-select v-model:value="musicMode" :options="[{label:'跟随工作区设置',value:'workspace'},{label:'从素材库随机选取',value:'random'},{label:'固定一首音乐',value:'fixed'},{label:'不使用配乐（静音）',value:'none'},{label:'保留模型原声，不替换配乐',value:'model'}]" />
+          <n-select v-model:value="musicMode" :options="taskMusicModeOptions" />
         </n-form-item>
         <MusicPicker v-if="musicMode === 'fixed'" :company-id="auth.currentCompanyId!" v-model:music-asset-id="musicAssetId" v-model:music-volume="musicVolume" />
         <n-form-item v-if="musicMode === 'random'" :label="`音乐音量 ${Math.round(musicVolume * 100)}%`"><n-slider :value="Math.round(musicVolume * 100)" :min="0" :max="100" @update:value="musicVolume = $event / 100" /></n-form-item>
@@ -38,7 +39,7 @@
         <p class="hint">{{ autoExecute ? '已开启：本任务及后续派发任务、视频脚本、成片与文案全部自动通过，生成完成后直接发布至所选账号，不再等待人工审批。会调用付费模型并对外发布，请确认目标与账号。' : '未开启：草稿、视频脚本及成片仍需人工审核。' }}</p>
         <n-form-item label="执行方式"><n-switch v-model:value="executionLoop" /> <span style="margin-left:12px">启用运营闭环</span></n-form-item>
         <n-form-item v-if="executionLoop" label="目标发布账号"><AccountPicker v-model="accountIds" :company-id="auth.currentCompanyId!" /></n-form-item>
-        <p class="hint">使用后台配置的大模型（未设置时读取 .env）。闭环按分析→内容方案→视频脚本→生成→成片审核→自动发布→数据复盘推进。视频生成会产生费用；开启全流程自动执行后，无需手动审核脚本和成片。</p>
+        <p class="hint">闭环按分析→内容方案→视频脚本→生成→成片审核→自动发布→数据复盘推进。视频生成会产生费用；开启全流程自动执行后，无需手动审核脚本和成片。</p>
         <p v-if="route.query.parent_task_id" class="hint">本任务将引用上一项已完成任务的交付结果。</p>
         <p v-if="error" class="error" role="alert">{{ error }}</p>
         <n-button attr-type="submit" type="primary" :loading="submitting" :disabled="!employeeId || !title.trim() || !goal.trim() || (timing === 'weekly' && !weekdays.length)">{{ editing ? '保存计划修改' : timing === 'now' ? '提交并执行' : '保存定时计划' }}</n-button>
@@ -48,6 +49,7 @@
 </template>
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { aspectRatioOptions, taskMusicModeOptions, type AspectRatio } from '@/constants/videoOptions'
 import { useRoute, useRouter } from 'vue-router'
 import { NForm, NFormItem, NSelect, NInput, NButton, NSwitch, NTimePicker, NSlider } from 'naive-ui'
 import AppPageHeader from '@/components/common/AppPageHeader.vue'
@@ -75,6 +77,7 @@ const selected = computed(() => employees.value.find(e => e.id === employeeId.va
 const executionLoop = ref(route.query.execution_loop !== 'false'), accountIds = ref<string[]>(String(route.query.account_ids ?? '').split(',').filter(Boolean))
 const autoExecute = ref(route.query.auto_execute === 'true')
 const generationMode = ref<'quality' | 'cost'>('quality')
+const aspectRatio = ref<AspectRatio>('9:16')
 const industryOverride = ref<string|null>(null)
 const reusePolicy = ref<'fresh' | 'prefer_reuse' | 'reuse_only'>('prefer_reuse')
 const musicMode = ref<'workspace' | 'fixed' | 'random' | 'none' | 'model'>('workspace')
@@ -97,6 +100,7 @@ onMounted(async () => {
       executionLoop.value = Boolean(params.execution_loop); accountIds.value = (params.publish_account_ids as string[] | undefined) ?? []
       autoExecute.value = Boolean(params.auto_execute); generationMode.value = (params.generation_mode as 'quality' | 'cost') ?? 'quality'
       reusePolicy.value = (params.reuse_policy as 'fresh' | 'prefer_reuse' | 'reuse_only') ?? 'prefer_reuse'
+      aspectRatio.value = (params.aspect_ratio as AspectRatio) ?? '9:16'
       const music = params.video_music as {selection_mode?: typeof musicMode.value; music_asset_id?: string | null; music_volume?: number} | undefined
       musicMode.value = music?.selection_mode ?? (params.music_disabled ? 'none' : params.music_asset_id ? 'fixed' : 'music_asset_id' in params ? 'model' : 'workspace')
       musicAssetId.value = music?.music_asset_id ?? (params.music_asset_id as string | null) ?? null
@@ -119,7 +123,7 @@ async function submit() {
       auto_execute: autoExecute.value, digital_employee_id: selected.value.id, title: title.value.trim(),
       task_type: editing.value && taskType.value ? taskType.value : types[selected.value.role] ?? 'custom',
       description: description.value.trim() || null,
-      input_params: { goal: goal.value.trim(), industry_override: industryOverride.value, execution_loop: executionLoop.value, publish_account_ids: accountIds.value, generation_mode: generationMode.value, reuse_policy: reusePolicy.value,
+      input_params: { aspect_ratio: aspectRatio.value, goal: goal.value.trim(), industry_override: industryOverride.value, execution_loop: executionLoop.value, publish_account_ids: accountIds.value, generation_mode: generationMode.value, reuse_policy: reusePolicy.value,
         video_music: {selection_mode:musicMode.value, music_asset_id:musicMode.value === 'fixed' ? musicAssetId.value : null, music_volume:musicVolume.value} },
       schedule: { frequency: timing.value === 'now' ? 'daily' as const : timing.value, time: scheduleTime.value, timezone: scheduleTimezone.value, weekdays: timing.value === 'weekly' ? weekdays.value : [0, 1, 2, 3, 4, 5, 6] },
       ...(route.query.parent_task_id ? { parent_task_id: String(route.query.parent_task_id) } : {}),

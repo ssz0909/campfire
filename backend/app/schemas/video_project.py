@@ -14,7 +14,7 @@ class MusicSettings(BaseModel):
 
 
 class DefaultMusicSettings(MusicSettings):
-    selection_mode: Literal['fixed','random','none'] = 'fixed'
+    selection_mode: Literal['fixed','random','none','model'] = 'fixed'
 
 
 class TaskMusicSettings(MusicSettings):

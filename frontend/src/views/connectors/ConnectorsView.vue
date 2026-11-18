@@ -46,7 +46,7 @@
         <div class="connector-card__actions" style="margin-bottom: 16px">
           <n-button type="primary" @click="showDddLogin = true">{{ connector.web_session_active ? '重新登录订单来了' : '账号密码连接订单来了' }}</n-button>
             <n-button v-if="connector.web_session_active" secondary type="error" :loading="loggingOut" @click="logoutHotel">退出订单来了</n-button>
-          <span v-if="connector.connection_mode === 'web'" class="muted">Web 会话已加密保存 · 数据来自所选门店</span>
+          <span v-if="connector.connection_mode === 'web'" class="muted">数据来自所选门店</span>
         </div>
         <n-form v-if="connector.connection_mode !== 'web'" label-placement="top" class="connector-card__form" @submit.prevent="save">
           <n-form-item
@@ -162,7 +162,7 @@
               {{ t('Sync orders') }}
             </n-button>
           </div>
-          <p class="muted">{{ connector.connection_mode === 'web' ? 'Web 连接器可按历史日期查询，实际可用范围以平台返回为准；数据分析员可按任务区间自动补同步。' : t('Only orders from the last 90 days can be synced.') }}</p>
+          <p class="muted">{{ connector.connection_mode === 'web' ? '可按日期同步历史订单；数据分析员会按任务需要补充同步。' : t('Only orders from the last 90 days can be synced.') }}</p>
           <p v-if="!connector.configured" class="muted">{{ t('Save the hotel number and token before syncing.') }}</p>
           <p v-if="syncError" class="notice notice--fail" role="alert">{{ syncError }}</p>
 
@@ -220,7 +220,7 @@
         <!-- (f) push note -->
         <p class="push-note">
           <InformationCircleOutline aria-hidden="true" />
-          <span v-if="connector.connection_mode === 'web'">Web 连接支持手动同步和数据分析任务补同步；会话过期后请重新登录。订单金额与财务实收分别展示。</span>
+          <span v-if="connector.connection_mode === 'web'">支持手动同步和按任务自动补充同步；登录过期后请重新登录。订单金额与财务实收分别展示。</span>
           <span v-else>{{ t('New orders also arrive automatically through platform push callbacks. No setup is needed here.') }}</span>
         </p>
       </AppCard>

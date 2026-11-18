@@ -17,7 +17,9 @@ def test_notices_remain_admin_only_and_clip_failure_clears(client, db):
     root = Path(__file__).resolve().parents[2] / 'frontend/dist'
     source = {'id': '11111111-1111-4111-8111-111111111111', 'name': '状态验收图片',
               'asset_type': 'image', 'processing_status': 'ready', 'file_size_bytes': 10,
-              'tags': [], 'metadata': {}, 'created_at': '2026-11-18T00:00:00Z'}
+              'tags': [], 'metadata': {'vision_analysis': {'status': 'skipped',
+                  'detail': '未配置完整的视觉模型参数，已保留原素材'}},
+              'created_at': '2026-11-18T00:00:00Z'}
     jobs = [{'id': 'old', 'status': 'failed', 'error': '旧的生成错误'}]
     notices = ['暂无外部搜索数据；管理员可在站长工具中配置Google或Bing自动同步，或导入渠道报表。',
                '未配置联网检索监测渠道，暂无引用样本',
@@ -59,6 +61,11 @@ def test_notices_remain_admin_only_and_clip_failure_clears(client, db):
         for notice in notices:
             expect(page.get_by_text(notice, exact=True)).to_be_visible()
         page.goto('https://campfire.dawoai.com/assets/')
+        expect(page.get_by_role('button', name='查看分镜视频')).to_be_visible()
+        expect(page.get_by_text('.env', exact=False)).to_have_count(0)
+        expect(page.get_by_text('未配置视觉能力', exact=False)).to_have_count(0)
+        expect(page.get_by_text('未配置完整的视觉模型参数', exact=False)).to_have_count(0)
+        expect(page.get_by_text('图片暂未完成识别，可重新识别或手动编辑标签。', exact=True)).to_be_visible()
         page.get_by_role('button', name='查看分镜视频').click()
         expect(page.get_by_text('分镜生成失败：旧的生成错误', exact=True)).to_be_visible()
         jobs.insert(0, {'id': 'new', 'status': 'generating_shots'})

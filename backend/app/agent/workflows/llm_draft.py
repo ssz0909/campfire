@@ -1,11 +1,14 @@
 """Generate structured drafts; model output cannot select arbitrary tools or tenants."""
 import asyncio
 import json
-from pydantic import BaseModel, Field, field_validator, model_validator
+import logging
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 from app.services.model_settings import get_llm_settings
 from app.services.video_director import DirectorShot, DIRECTOR_PROMPT, validate_plan
 from app.services.video_cost_plan import COST_DIRECTOR_PROMPT, CostShot, validate_cost_plan
 from app.providers.llm.openai_provider import OpenAIProvider
+
+logger = logging.getLogger(__name__)
 
 TRANSITIONS = {
     'operations_manager': {'content_planner', 'data_analyst'},
@@ -41,7 +44,10 @@ class Draft(BaseModel):
         if not isinstance(value, dict):
             return value
         result=dict(value)
-        for section in result.get('sections') or []:
+        sections = result.get('sections')
+        if not isinstance(sections, list):
+            return result
+        for section in sections:
             content=section.get('content') if isinstance(section,dict) else None
             if not isinstance(content,dict):
                 continue
@@ -73,6 +79,11 @@ class Draft(BaseModel):
                 return str(node)
             raise ValueError('视频脚本包含不支持的内容类型')
         return render(value) if isinstance(value, (dict, list)) else value
+
+class PlanningDraft(Draft):
+    # Preserve planning suggestions without treating them as executable shots.
+    video_storyboard: list[dict] = Field(default_factory=list, max_length=40)
+
 
 class CostDraft(Draft):
     video_storyboard: list[CostShot] = Field(default_factory=list, max_length=12)
@@ -123,6 +134,13 @@ def enrich(result, task, runtime, forbidden_words):
     snapshot = result.get('industry_template_snapshot') or (task.input_params or {}).get('industry_template_snapshot')
     if snapshot:
         system += render_guidance(snapshot)
+    if result.get('video_brief'):
+        system += f"本次画面比例为{result['video_brief'].get('aspect_ratio', '9:16')}，所有镜头构图和主体安全区域均按该比例设计，不得改成其他画幅。"
+        system += ('video_brief是后端按当前制作模式、真实可用图片和用户时长要求计算的统一制作约束。'
+            '所有策划、时间轴、视频脚本和后续任务必须遵守target_duration_seconds、minimum_image_count和feasible。'
+            '用户给出时长范围时已在该范围内选择可制作时长；不得擅自取上限或延长。'
+            '未指定时长时可按素材容量确定；明确固定时长不得缩短，不得改制作模式或重复图片凑时长。'
+            'feasible为false时交付素材缺口和调整建议，不派发视频制作任务，不声称方案可直接制作。')
     if result['role'] == 'video_producer':
         system += COST_DIRECTOR_PROMPT if generation_mode == 'cost' else DIRECTOR_PROMPT
         if (result.get('data_sources', {}).get('visual_requirements') or {}).get('people_opening'):
@@ -140,33 +158,80 @@ def enrich(result, task, runtime, forbidden_words):
                 '不要求已有片段执行新的动作；画幅须匹配，保留时长不能超过库存片段。'
                 '淡入淡出依赖相邻镜头，优先使用cut直接剪辑的片段。库存不足时明确缺口，不得声称已经生成或发布。')
     context_json = json.dumps(draft_context(result), ensure_ascii=False, default=str)
-    response = asyncio.run(OpenAIProvider(config=config).complete([
+    is_video = result['role'] == 'video_producer'
+    draft_type = (CostDraft if generation_mode == 'cost' else Draft) if is_video else PlanningDraft
+    system += ('当前岗位负责可执行分镜，必须满足素材、时长和任务约束。' if is_video else
+        '当前岗位只交付分析或策划报告及后续工作要求；镜头创意可作为建议，不要求绑定素材，不得声称视频已制作。')
+    system += '当前岗位交付JSON Schema：' + json.dumps(draft_type.model_json_schema(), ensure_ascii=False)
+    messages = [
         {'role': 'system', 'content': system},
-        {'role': 'user', 'content': context_json if result['role'] == 'video_producer' else context_json[:70000]},
-    ], billing_company_id=task.company_id, max_tokens=12000 if result['role'] == 'video_producer' else 4000))
-    text = response.get('content') or ''
-    if text.startswith('```'):
-        text = text.split('\n', 1)[-1].rsplit('```', 1)[0].strip()
-    draft_type = CostDraft if result['role'] == 'video_producer' and generation_mode == 'cost' else Draft
-    draft = draft_type.model_validate(json.loads(text))
-    if result['role'] == 'video_producer' and not draft.video_script.strip():
-        raise ValueError('视频制作员未返回动态镜头脚本，请重新生成岗位交付')
-    storyboard = []
-    if result['role'] == 'video_producer':
-        video_brief = result.get('video_brief') or {}
-        if generation_mode == 'cost':
-            storyboard = validate_cost_plan([s.model_dump() for s in draft.video_storyboard],
-                result['data_sources'].get('selected_assets', []), video_brief['target_duration_seconds'])
-        else:
-            storyboard = validate_plan([s.model_dump() for s in draft.video_storyboard],
-                result['data_sources'].get('selected_assets', []), result['video_brief']['target_duration_seconds'])
+        {'role': 'user', 'content': context_json if is_video else context_json[:70000]},
+    ]
+    provider = OpenAIProvider(config=config)
+    usage = {'input_tokens': 0, 'output_tokens': 0}
+    cost, models = 0, []
+    # Retry only a received, invalid delivery once. Never retry transport errors here.
+    for attempt in range(2):
+        response = asyncio.run(provider.complete(messages, billing_company_id=task.company_id,
+            max_tokens=12000 if is_video else 4000))
+        models.append(response['model'])
+        for key in usage:
+            usage[key] += response[key]
+        cost += provider.estimate_cost_cents(response['model'], response['input_tokens'], response['output_tokens'])
+        task.models_used = list(dict.fromkeys(models))
+        task.actual_cost_cents = cost
+        runtime._append_log(task, 'info', '已收到岗位交付', {
+            'model': response['model'], 'input_tokens': response['input_tokens'],
+            'output_tokens': response['output_tokens'], 'attempt': attempt + 1,
+        })
+        text = (response.get('content') or '').strip()
+        fence = chr(96) * 3
+        if text.startswith(fence):
+            text = text.split(chr(10), 1)[-1].rsplit(fence, 1)[0].strip()
+        try:
+            if response.get('finish_reason') == 'length':
+                raise ValueError('交付超过输出长度上限，请精简内容并返回完整JSON')
+            draft = draft_type.model_validate(json.loads(text))
+            storyboard = []
+            if is_video:
+                if not draft.video_script.strip():
+                    raise ValueError('视频制作员未返回动态镜头脚本')
+                brief = result.get('video_brief') or {}
+                validator = validate_cost_plan if generation_mode == 'cost' else validate_plan
+                storyboard = validator([s.model_dump() for s in draft.video_storyboard],
+                    result['data_sources'].get('selected_assets', []), brief['target_duration_seconds'])
+            break
+        except ValueError as exc:
+            if isinstance(exc, ValidationError):
+                details = [{'field': '.'.join(map(str, e['loc'])), 'type': e['type']}
+                           for e in exc.errors(include_url=False, include_context=False, include_input=False)[:20]]
+            elif isinstance(exc, json.JSONDecodeError):
+                details = [{'field': 'JSON', 'type': 'invalid_json'}]
+            else:
+                details = [{'field': 'delivery', 'type': str(exc)[:500]}]
+            logger.warning('Draft validation failed task=%s role=%s attempt=%s issues=%s',
+                task.id, result['role'], attempt + 1, details)
+            runtime._append_log(task, 'warning', '岗位交付未通过检查，自动纠正' if attempt == 0 else '岗位交付纠正后仍未通过检查',
+                {'role': result['role'], 'attempt': attempt + 1, 'issues': details})
+            if attempt == 1:
+                raise ValueError('本次任务交付未通过内容检查，自动纠正后仍未满足要求，请重新执行任务。尚未开始视频生成或平台发布。') from None
+            messages = messages + [
+                {'role': 'assistant', 'content': text},
+                {'role': 'user', 'content': '上一份交付未通过检查：' + json.dumps(details, ensure_ascii=False) +
+                 '。请根据原任务、真实资料和岗位Schema纠正，返回完整JSON；不能虚构素材ID、放宽时长要求或声称已执行。'},
+            ]
     actions, seen = [], set()
     for action in draft.next_actions:
+        if action.role == 'video_producer' and result.get('video_brief', {}).get('feasible') is False:
+            continue
         if action.role not in allowed or action.role in seen:
             continue
         seen.add(action.role)
         actions.append(action.model_dump())
     sections = [s.model_dump() for s in draft.sections]
+    if not is_video and draft.video_storyboard:
+        sections.append({'title': '视频创意建议（交由视频制作员细化）',
+                         'content': json.dumps(draft.video_storyboard, ensure_ascii=False, indent=2)})
     if storyboard and generation_mode == 'cost':
         sections.append({'title':'分段与调用用量', 'content':'\n'.join(
             f"片段{s['shot_number']}｜模型生成5秒，成片保留{s['duration_seconds']:.2f}秒｜{s['purpose']}｜素材{s['source_asset_id']}" +
@@ -200,12 +265,6 @@ def enrich(result, task, runtime, forbidden_words):
             for action in actions:
                 action['goal'] = action['goal'].replace(str(word), '[禁用词已隐藏]')
                 action['title'] = action['title'].replace(str(word), '[禁用词已隐藏]')
-    task.models_used = [response['model']]
-    task.actual_cost_cents = OpenAIProvider(config=config).estimate_cost_cents(response['model'], response['input_tokens'], response['output_tokens'])
-    runtime._append_log(task, 'info', '已调用大模型生成岗位交付', {
-        'model': response['model'], 'input_tokens': response['input_tokens'],
-        'output_tokens': response['output_tokens'],
-    })
     return {**result, 'mode': 'llm', 'mode_label': '大模型生成草稿',
             'publish_title': publish_title, 'publish_description': publish_description,
             'video_script': video_script,
@@ -213,4 +272,4 @@ def enrich(result, task, runtime, forbidden_words):
             'notice': '审批通过后自动派发后续任务；视频脚本审批通过会启动视频模型生成。',
             'sections': sections, 'next_actions': actions,
             'report_markdown': '\n\n'.join(f"## {s['title']}\n{s['content']}" for s in sections),
-            'usage': {k: response[k] for k in ('model','input_tokens','output_tokens')}}
+            'usage': {'model': response['model'], **usage}}

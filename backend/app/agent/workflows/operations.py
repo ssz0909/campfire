@@ -84,21 +84,34 @@ class OperationsWorkflow:
             "published_content": [{"title": j.title, "platform_connection_id": str(j.platform_connection_id), "metrics": j.metrics} for j in published],
         }
         selected_assets=[]
-        if role=='video_producer':
+        video_brief = None
+        if role in ('operations_manager', 'content_planner', 'video_producer'):
             from app.services.asset_selection import select_assets_for_video
-            from app.services.video_director import target_duration
-            video_duration=target_duration(task.input_params, (task.input_params or {}).get('execution_goal') or goal)
+            from app.services.video_capacity import task_duration_request, capacity_brief, require_capacity
+            request = task_duration_request(db, task)
+            video_duration = request['max_seconds']
             import math
             from app.services.video_requirements import task_visual_text, requires_people_opening, mark_opening_candidates
             visual_text = task_visual_text(task)
+            aspect_ratio = (task.input_params or {}).get('aspect_ratio', '9:16')
             people_opening = requires_people_opening(visual_text)
             pool_limit=min(40,max(8,math.ceil(video_duration/2.5)+4))
             selected_assets=select_assets_for_video(db,company_id,visual_text,template=template,
-                limit=pool_limit,rotation_key=str(task.id),exclude_task_id=task.id,require_people_opening=people_opening)
+                limit=pool_limit,rotation_key=str(task.id),exclude_task_id=task.id,require_people_opening=people_opening if role == 'video_producer' else False, aspect_ratio=aspect_ratio)
             sources['selected_assets']=[{'id':str(a.id),'name':a.name,'category':a.category,'tags':a.tags or [],
                 'width':a.width,'height':a.height,'people_visible':((a.asset_metadata or {}).get('vision_analysis') or {}).get('people_visible'), 'description':((a.asset_metadata or {}).get('vision_analysis') or {}).get('visual_description') or a.source_description} for a in selected_assets]
-            sources['selected_assets'] = mark_opening_candidates(sources['selected_assets'], people_opening)
+            if role == 'video_producer':
+                sources['selected_assets'] = mark_opening_candidates(sources['selected_assets'], people_opening)
             sources['visual_requirements'] = {'people_opening': people_opening}
+            video_brief = capacity_brief(sources['selected_assets'], request,
+                (task.input_params or {}).get('generation_mode', 'quality'))
+            video_brief['reuse_policy'] = (task.input_params or {}).get('reuse_policy', 'fresh')
+            video_brief['aspect_ratio'] = aspect_ratio
+            if role == 'video_producer':
+                require_capacity(video_brief)
+            video_duration = video_brief['target_duration_seconds']
+            task.input_params = {**(task.input_params or {}), 'video_duration_request': request,
+                'target_duration_seconds': video_duration}
             if people_opening:
                 runtime._append_log(task, 'info', '已启用人物首镜约束：优先轮换符合要求的人物图片，首镜不符将停止制作')
             if (task.input_params or {}).get('reuse_policy', 'fresh') != 'fresh':
@@ -146,6 +159,8 @@ class OperationsWorkflow:
         positioning = company.brand_positioning or "待补充品牌卖点"
         sections = [{"title": "任务目标", "content": str(goal)},
                     {"title": "行业创作配置", "content": f"{template['name']} · v{template['version']}（{template['resolved_from']}）\n" + render_guidance(template)}]
+        if video_brief:
+            sections.append({'title': '视频时长与素材可行性', 'content': video_brief['capacity_note']})
         if task.parent_task_id:
             parent = db.query(OperationTask).filter(OperationTask.id == task.parent_task_id,
                 OperationTask.company_id == company_id, OperationTask.status == "completed").first()
@@ -164,7 +179,7 @@ class OperationsWorkflow:
             next_actions = [{"role": "video_producer", "title": "制作营销视频脚本", "goal": f"根据以下已审阅文案及原任务时长要求制作节奏鲜明的结构化分镜脚本：{goal}"}]
         elif role == "video_producer":
             sections += [
-                {"title": "视频制作方案", "content": f"目标：{goal}\n受众：{audience}\n规格：竖屏9:16，15至60秒成片，每镜1.5至3.5秒，按叙事选材，模型片段剪取后合成；字幕需人工复核。\n本次交付为视频模型脚本与分镜，审批后调用视频模型生成文件。"},
+                {"title": "视频制作方案", "content": f"目标：{goal}\n受众：{audience}\n规格：画面比例{aspect_ratio}，15至60秒成片，每镜1.5至3.5秒，按叙事选材，模型片段剪取后合成；字幕需人工复核。\n本次交付为视频模型脚本与分镜，审批后调用视频模型生成文件。"},
                 {"title": "脚本与分镜", "content": f"每个成片镜头1.5至3.5秒｜以已授权图片素材作为首帧｜自然推进或横移，保持主体完整并延续真实光线｜围绕任务主题展示{company.name}相关主体、产品或场景｜结尾引导了解更多、进一步了解。不得虚构人物、产品功能、设施或价格。"},
                 {"title": "素材与制作检查", "content": "\n".join(f"可选素材：{a.name}" for a in assets[:10]) or "请上传与任务主题相关的主体、产品、场景及细节素材；确认授权、价格和字幕后，在视频项目中制作。"},
             ]
@@ -220,7 +235,8 @@ class OperationsWorkflow:
             from datetime import datetime, timezone
             employee.last_executed_at = datetime.now(timezone.utc)
         return {"title": task.title, "mode": "local_rules", "mode_label": "本地规则草稿（未调用大模型）",
-                **({'video_storyboard':local_storyboard,'video_brief': {'target_duration_seconds':video_duration,'aspect_ratio':'9:16','generation_mode':(task.input_params or {}).get('generation_mode','quality'),'reuse_policy':(task.input_params or {}).get('reuse_policy','fresh')}, 'selected_asset_ids':[str(a.id) for a in selected_assets]} if role=='video_producer' else {}),
+                **({'video_brief': video_brief} if video_brief else {}),
+                **({'video_storyboard':local_storyboard, 'selected_asset_ids':[str(a.id) for a in selected_assets]} if role=='video_producer' else {}),
                 "employee_name": employee.name if employee else "运营工作流", "role": role,
                 'industry_template_snapshot': template,
                 "sections": sections, "report_markdown": report, "data_sources": sources,

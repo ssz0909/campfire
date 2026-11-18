@@ -83,7 +83,7 @@
         <div class="actions"><n-button v-for="(action, i) in task.output.next_actions" :key="i" @click="handoff(action)">{{ action.title }}</n-button></div>
       </AppCard>
       <AppCard v-if="task.status === 'completed' && task.output?.delivery === 'video_script'" class="block">
-        <h2>制作视频文件</h2><p class="hint">脚本通过后自动创建视频项目。打开项目查看生成进度、预览或配置错误。</p>
+        <h2>制作视频文件</h2><p class="hint">脚本通过后自动创建视频项目。打开项目查看制作进度、预览成片或重新执行。</p>
         <n-button @click="router.push(task.output.video_project_id ? `/video/${task.output.video_project_id}` : '/video/new')">查看视频项目</n-button>
       </AppCard>
       <AppCard class="block"><h2>执行记录</h2>

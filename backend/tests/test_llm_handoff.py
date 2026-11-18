@@ -209,3 +209,117 @@ def test_full_approved_chain_creates_video_without_live_calls(client, db, monkey
     assert project.task_id is not None and project.project_status=='analyzing'
     assert '连续动态镜头' in project.script
     assert enqueue.call_count==1
+
+
+@pytest.mark.parametrize('role', ['operations_manager', 'content_planner', 'data_analyst', 'operations_assistant'])
+@pytest.mark.parametrize('nested', [False, True])
+def test_planning_storyboard_stays_advisory(db, monkeypatch, role, nested):
+    parent = setup_parent(db)
+    for key, value in [('LLM_BASE_URL', 'https://relay.test/v1'), ('LLM_MODEL', 'model'), ('LLM_API_KEY', 'test')]:
+        monkeypatch.setattr(settings, key, value)
+    # The production incident: seven planning rows, without executable shot fields.
+    suggestions = [{'time': f'{i * 5}—{i * 5 + 5}秒', 'source': '产品截图',
+                    'status': '待录制及审核'} for i in range(7)]
+    payload = {'sections': [{'title': '推广方案', 'content': '真实产品功能介绍'}],
+               'next_actions': [{'role': 'content_planner', 'title': '制定方案', 'goal': '产品推广'}]}
+    if nested:
+        payload['sections'][0]['content'] = {'video_storyboard': suggestions}
+    else:
+        payload['video_storyboard'] = suggestions
+    complete = AsyncMock(return_value={'content': json.dumps(payload), 'model': 'model',
+                                      'input_tokens': 10, 'output_tokens': 20})
+    monkeypatch.setattr('app.agent.workflows.llm_draft.OpenAIProvider.complete', complete)
+    result = enrich({'role': role, 'delivery': 'report'}, parent, AgentRuntime(db), [])
+    assert complete.call_count == 1
+    assert 'video_storyboard' not in result
+    assert 'selected_asset_ids' not in result
+    assert '待录制及审核' in result['report_markdown']
+    assert result['delivery'] == 'report'
+    assert all(a['role'] != 'operations_manager' for a in result['next_actions'])
+
+
+def test_invalid_json_is_corrected_once_and_all_usage_counted(db, monkeypatch):
+    parent = setup_parent(db)
+    for key, value in [('LLM_BASE_URL', 'https://relay.test/v1'), ('LLM_MODEL', 'model'), ('LLM_API_KEY', 'test')]:
+        monkeypatch.setattr(settings, key, value)
+    complete = AsyncMock(side_effect=[
+        {'content': '{bad', 'model': 'model', 'input_tokens': 10, 'output_tokens': 20},
+        {'content': json.dumps({'sections': [{'title': '交付', 'content': '完成方案'}]}),
+         'model': 'model', 'input_tokens': 30, 'output_tokens': 40},
+    ])
+    monkeypatch.setattr('app.agent.workflows.llm_draft.OpenAIProvider.complete', complete)
+    result = enrich(parent.output, parent, AgentRuntime(db), [])
+    assert complete.call_count == 2
+    assert result['usage'] == {'model': 'model', 'input_tokens': 40, 'output_tokens': 60}
+    assert parent.actual_cost_cents == 2
+    assert 'invalid_json' in complete.call_args.args[0][-1]['content']
+    assert 'JSON Schema' not in result['report_markdown']
+
+
+def test_exhausted_correction_has_clean_error_and_bounded_attempts(db, monkeypatch):
+    parent = setup_parent(db)
+    for key, value in [('LLM_BASE_URL', 'https://relay.test/v1'), ('LLM_MODEL', 'model'), ('LLM_API_KEY', 'test')]:
+        monkeypatch.setattr(settings, key, value)
+    complete = AsyncMock(return_value={'content': '{}', 'model': 'model', 'input_tokens': 10, 'output_tokens': 20})
+    monkeypatch.setattr('app.agent.workflows.llm_draft.OpenAIProvider.complete', complete)
+    with pytest.raises(ValueError, match='自动纠正后仍未满足要求') as exc:
+        enrich(parent.output, parent, AgentRuntime(db), [])
+    assert 'validation errors' not in str(exc.value)
+    assert 'pydantic' not in str(exc.value)
+    assert complete.call_count == 2
+    assert parent.actual_cost_cents == 2
+
+
+def test_transport_error_does_not_trigger_format_correction(db, monkeypatch):
+    parent = setup_parent(db)
+    for key, value in [('LLM_BASE_URL', 'https://relay.test/v1'), ('LLM_MODEL', 'model'), ('LLM_API_KEY', 'test')]:
+        monkeypatch.setattr(settings, key, value)
+    complete = AsyncMock(side_effect=ValueError('大模型请求超时'))
+    monkeypatch.setattr('app.agent.workflows.llm_draft.OpenAIProvider.complete', complete)
+    with pytest.raises(ValueError, match='大模型请求超时'):
+        enrich(parent.output, parent, AgentRuntime(db), [])
+    assert complete.call_count == 1
+
+
+@pytest.mark.parametrize('mode', ['quality', 'cost'])
+@pytest.mark.parametrize('recover', [False, True])
+def test_video_constraints_remain_strict_during_correction(db, monkeypatch, mode, recover):
+    from app.services.video_director import fallback_plan
+    from app.services.video_cost_plan import cost_plan
+    from copy import deepcopy
+    parent = setup_parent(db)
+    parent.input_params = {'generation_mode': mode}
+    for key, value in [('LLM_BASE_URL', 'https://relay.test/v1'), ('LLM_MODEL', 'model'), ('LLM_API_KEY', 'test')]:
+        monkeypatch.setattr(settings, key, value)
+    assets = [{'id': f'image-{i}', 'name': '真实产品'} for i in range(6)]
+    valid = cost_plan(assets, 15) if mode == 'cost' else fallback_plan(assets, 15)
+    invalid = deepcopy(valid)
+    invalid[0]['source_asset_id'] = 'outside-candidate-pool'
+    def response(plan):
+        return {'model': 'model', 'input_tokens': 10, 'output_tokens': 20,
+                'content': json.dumps({'sections': [{'title': '制作方案', 'content': '真实产品'}],
+                                      'video_script': '真实场景动态镜头', 'video_storyboard': plan})}
+    complete = AsyncMock(side_effect=[response(invalid), response(valid if recover else invalid)])
+    monkeypatch.setattr('app.agent.workflows.llm_draft.OpenAIProvider.complete', complete)
+    context = {'role': 'video_producer', 'video_brief': {'target_duration_seconds': 15},
+               'data_sources': {'selected_assets': assets}}
+    if recover:
+        result = enrich(context, parent, AgentRuntime(db), [])
+        assert result['video_storyboard']
+        assert 'outside-candidate-pool' not in result['selected_asset_ids']
+        assert sum(s['duration_seconds'] for s in result['video_storyboard']) == 15
+    else:
+        with pytest.raises(ValueError, match='自动纠正后仍未满足要求'):
+            enrich(context, parent, AgentRuntime(db), [])
+    assert complete.call_count == 2
+
+
+def test_planning_schema_is_separate_and_invalid_sections_fail_cleanly():
+    from app.agent.workflows.llm_draft import Draft, PlanningDraft
+    assert 'DirectorShot' not in json.dumps(PlanningDraft.model_json_schema())
+    assert 'DirectorShot' in json.dumps(Draft.model_json_schema())
+    with pytest.raises(ValueError):
+        PlanningDraft.model_validate({'sections': 42})
+    with pytest.raises(ValueError, match='冲突'):
+        Draft.model_validate({'video_script': '第一版', 'sections': [
+            {'title': '脚本', 'content': {'video_script': '冲突版本'}}]})

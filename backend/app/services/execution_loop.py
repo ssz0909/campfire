@@ -23,6 +23,8 @@ def enabled(task):
 
 def configure(params, goal):
     params = dict(params or {})
+    if params.get('aspect_ratio', '9:16') not in ('9:16', '16:9', '1:1'):
+        raise HTTPException(422, '画面比例仅支持竖屏9:16、横屏16:9或方形1:1')
     if params.get('execution_loop') is None and '执行' in goal and not any(
             word in goal for word in ('不执行', '不要执行', '暂不执行', '仅分析')):
         params['execution_loop'] = True
@@ -65,6 +67,10 @@ def actions_for(task, result):
         'goal': f'执行总目标：{goal}。基于上游已审批交付完成本岗位工作；事实不足时明确标记，不虚构价格、服务或业绩。'
                 '当前只生成本岗位草稿；审批后由工作流自动进入下一阶段，不得要求终止后续流程。',
     }]
+    if next_role == 'video_producer' and result.get('video_brief', {}).get('feasible') is False:
+        actions = []
+        return {**result, 'next_actions': actions,
+                'execution_blocked': result['video_brief']['capacity_note']}
     return {**result, 'next_actions': actions, 'execution_blocked':
             '订单范围未完整覆盖，请修复连接器后补同步并重新分析' if blocked else None,
             'notice': '执行闭环：分析→内容方案→视频脚本→生成→成片与文案审核→自动发布→数据回流复盘。成片审核通过后自动发布至已选平台，无需再次审批。'}
@@ -73,10 +79,11 @@ def actions_for(task, result):
 def child_params(parent):
     params = parent.input_params or {}
     automation = {'auto_execute': params.get('auto_execute') is True,
+                  'aspect_ratio': params.get('aspect_ratio', '9:16'),
                   'generation_mode': params.get('generation_mode', 'quality'),
                   'reuse_policy': params.get('reuse_policy', 'fresh')}
     from copy import deepcopy
-    for key in ('industry_override', 'industry_template_snapshot', 'video_music', 'music_asset_id', 'music_volume', 'music_disabled'):
+    for key in ('industry_override', 'industry_template_snapshot', 'video_music', 'music_asset_id', 'music_volume', 'music_disabled', 'video_duration_request'):
         if key in params:
             automation[key] = deepcopy(params[key])
     if not enabled(parent):
