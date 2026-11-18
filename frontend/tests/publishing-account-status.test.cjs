@@ -46,3 +46,12 @@ test('verified saved accounts remain publishable without keeping their browser o
   }
   assert.equal(api.publishingAccountStatus({ status: 'session_saved' }).publish_ready, false)
 })
+
+
+test('inconclusive identity check retains saved session without authorizing publication', () => {
+  const result = api.publishingAccountStatus({status: 'login_required', login_required: true,
+    auth_state: 'unverified', session_saved: true, message: '平台接口暂不可用'})
+  assert.equal(result.session_saved, true)
+  assert.equal(result.publish_ready, false)
+  assert.equal(result.status, 'authorizing')
+})

@@ -1,4 +1,5 @@
 type WebAccountStatus = {
+  auth_state?: string
   status: string
   session_saved?: boolean
   login_required?: boolean
@@ -18,7 +19,8 @@ export function publishingAccountStatus(result: WebAccountStatus) {
     : result.status === 'login_required' ? 'authorizing' : 'disconnected'
   return {
     status,
-    session_saved: status === 'session_saved' || (status === 'authorized' && result.session_saved === true),
+    session_saved: status === 'session_saved' || (status === 'authorized' && result.session_saved === true) ||
+      (!mismatch && result.auth_state === 'unverified' && result.session_saved === true),
     publish_ready: status === 'authorized' || (status === 'session_saved' && result.publish_ready === true),
     status_message: ['identity_mismatch', 'authorizing'].includes(status) ? result.message || '' : '',
   }

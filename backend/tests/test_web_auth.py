@@ -145,3 +145,38 @@ def test_publish_forces_proof_refresh_before_using_identity(monkeypatch):
     assert result['auth_state'] == 'expired'
     session['page'].locator.assert_not_called()
     session['page'].wait_for_function.assert_not_called()
+
+
+def test_channels_anonymous_success_cannot_replace_authenticated_template():
+    original = template('wechat_channels')
+    session = {'metrics_api_templates': {'identity': original.copy()}}
+    request = Mock(method='POST', url=original['url'],
+                   post_data_json={'rawKeyBuff': '', 'pluginSessionId': ''})
+    response = Mock(url=request.url, status=200, request=request)
+    response.json.return_value = {'errCode': 0, 'data': {}}
+    auth.api.observe_request(response, 'wechat_channels', session)
+    assert session['metrics_api_templates']['identity'] == original
+    response.json.return_value = payload('wechat_channels')
+    auth.api.observe_request(response, 'wechat_channels', session)
+    assert session['metrics_api_templates']['identity'] == original
+
+
+def test_channels_snapshot_prefers_authenticated_page_over_empty_iframe(monkeypatch, tmp_path):
+    from app.core.secrets import decrypt_json
+    monkeypatch.setattr(web.settings, 'LOCAL_STORAGE_PATH', str(tmp_path))
+    origin = 'https://channels.weixin.qq.com'
+    def frame(raw):
+        return SimpleNamespace(url=origin, evaluate=lambda script: {'origin': origin, 'localStorage': [
+            {'name': 'finder_raw', 'value': raw}, {'name': 'finder_uin', 'value': '123' if raw else ''}]})
+    page = SimpleNamespace(is_closed=lambda: False, frames=[frame('valid-token'), frame('')])
+    session = {'context': SimpleNamespace(pages=[page], cookies=lambda: cookies('wechat_channels')),
+               'account_identity': {'identity_verified': True, 'account_fingerprint': 'bound'}}
+    assert web._save_session('company', 'wechat_channels', session)
+    path = web._saved_path('company', 'wechat_channels')
+    state = decrypt_json(path.read_text())
+    assert state['origins'][0]['localStorage'][0]['value'] == 'valid-token'
+    before = path.read_bytes()
+    page.frames = [frame('')]
+    session['saved_at'] = 0
+    assert not web._save_session('company', 'wechat_channels', session)
+    assert path.read_bytes() == before
