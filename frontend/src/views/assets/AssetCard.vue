@@ -58,8 +58,8 @@
   </AppCard>
   <n-modal v-model:show="showRelated" preset="card" :title="`${asset.name} · 分镜视频`" class="clips-modal" style="width:min(880px, calc(100vw - 24px))" @update:show="onRelatedVisibility">
     <div class="clips-modal__body">
-      <p v-if="relatedJobs.some(job => ['analyzing','generating_shots','compositing','waiting_retry'].includes(job.status))">分镜生成中，完成后会显示在这里。</p>
-      <p v-for="job in relatedJobs.filter(job => job.status === 'failed')" :key="job.id" class="asset-card__error">分镜生成失败：{{ job.error || '请重新填写提示词后再试' }}</p>
+      <p v-if="latestRelatedJob && ['analyzing','generating_shots','compositing','waiting_retry'].includes(latestRelatedJob.status)">分镜生成中，完成后会显示在这里。</p>
+      <p v-if="latestRelatedJob?.status === 'failed'" class="asset-card__error">分镜生成失败：{{ latestRelatedJob.error || '请重新填写提示词后再试' }}</p>
       <template v-if="selectedClip">
         <video :key="selectedClip.id" class="clips-modal__video" :src="selectedClip.file_url" :poster="selectedClip.thumbnail_url" controls preload="metadata" />
         <div class="clips-modal__details">
@@ -137,6 +137,8 @@ const selectedIndex=ref(0),showDeleteClip=ref(false),deleteClipBusy=ref(false),c
 const aspectOptions=[{label:'竖屏 9:16',value:'9:16'},{label:'横屏 16:9',value:'16:9'},{label:'方形 1:1',value:'1:1'}]
 const showPreview=ref(false),showRegenerate=ref(false),regenerationPrompt=ref(''),regenerationBusy=ref(false),regenerationError=ref(''),approvingId=ref(''),relatedLoading=ref(false),relatedLoaded=ref(false),showRelated=ref(false),relatedClips=ref<Asset[]>([]),relatedJobs=ref<Array<{id:string;status:string;error?:string|null}>>([]),relatedTotal=ref(0),regenerationTarget=ref<Asset|null>(null)
 let relatedTimer:ReturnType<typeof setInterval>|undefined
+// Jobs are returned newest first. Older failures remain in history, not current status.
+const latestRelatedJob=computed(()=>relatedJobs.value[0] || null)
 const selectedClip=computed(()=>relatedClips.value[selectedIndex.value] || null)
 const regenerationUsesHistory=ref(false)
 onUnmounted(()=>{if(relatedTimer)clearInterval(relatedTimer)})
