@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 
@@ -32,10 +32,10 @@ def update_schedule_template(company_id: uuid.UUID, tid: uuid.UUID, data: Schedu
 
 
 @router.post('/{company_id}/tasks/{tid}/run-now', response_model=TaskResponse, status_code=201)
-def run_schedule_now(company_id: uuid.UUID, tid: uuid.UUID,
+def run_schedule_now(company_id: uuid.UUID, tid: uuid.UUID, background_tasks: BackgroundTasks,
     current_user: User = Depends(require_permission(Permission.TASK_EXECUTE)), db: Session = Depends(get_db)):
     task = TaskService(db).run_schedule_now(company_id, tid, current_user.id)
-    dispatch_task(db, task, current_user)
+    dispatch_task(db, task, current_user, background_tasks=background_tasks)
     return task
 
 
@@ -86,14 +86,14 @@ def execution_status(company_id: uuid.UUID, tid: uuid.UUID,
 
 
 @router.post('/{company_id}/tasks/{tid}/execution/continue')
-def continue_execution(company_id: uuid.UUID, tid: uuid.UUID, data: ContinueExecution,
+def continue_execution(company_id: uuid.UUID, tid: uuid.UUID, data: ContinueExecution, background_tasks: BackgroundTasks,
     current_user: User = Depends(require_permission(Permission.TASK_EXECUTE)), db: Session = Depends(get_db)):
     from app.services.execution_loop import continue_loop, snapshot
     TaskService(db).get_task(company_id, tid)
     root = db.query(OperationTask).filter_by(id=tid, company_id=company_id).with_for_update().one()
     created = continue_loop(db, root, data.publish_platforms, [str(value) for value in data.publish_account_ids] if data.publish_account_ids is not None else None)
     for task in created:
-        dispatch_task(db, task, db.get(User, task.created_by))
+        dispatch_task(db, task, db.get(User, task.created_by), background_tasks=background_tasks)
     return snapshot(db, root)
 
 
@@ -101,6 +101,7 @@ def continue_execution(company_id: uuid.UUID, tid: uuid.UUID, data: ContinueExec
 def create_task(
     company_id: uuid.UUID,
     data: TaskCreate,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_permission(Permission.TASK_CREATE)),
     db: Session = Depends(get_db),
 ):
@@ -112,7 +113,7 @@ def create_task(
         if not settings.EXECUTION_AUTOMATION_ENABLED:
             raise HTTPException(400, '服务端定时调度未启用，请联系管理员开启 EXECUTION_AUTOMATION_ENABLED')
     task = TaskService(db).create_task(company_id, current_user.id, data)
-    dispatch_task(db, task, current_user)
+    dispatch_task(db, task, current_user, background_tasks=background_tasks)
     return task
 
 
@@ -154,11 +155,12 @@ def cancel_task(
 def retry_task(
     company_id: uuid.UUID,
     tid: uuid.UUID,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_permission(Permission.TASK_EXECUTE)),
     db: Session = Depends(get_db),
 ):
     task = TaskService(db).retry_task(company_id, tid)
-    dispatch_task(db, task, current_user)
+    dispatch_task(db, task, current_user, background_tasks=background_tasks)
     return task
 
 

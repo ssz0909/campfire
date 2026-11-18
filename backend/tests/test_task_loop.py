@@ -4,6 +4,13 @@ from app.config import settings
 
 def test_inline_employee_report_and_approval(client, db, monkeypatch):
     monkeypatch.setattr(settings, 'TASK_EXECUTION_MODE', 'inline')
+    from contextlib import contextmanager
+
+    @contextmanager
+    def background_session():
+        yield db
+
+    monkeypatch.setattr('app.database.SessionLocal', background_session)
     owner = create_test_user(db, email='loop@example.com')
     company = create_test_company(db, owner, slug='loop-company')
     # Provision defaults through employee list endpoint
@@ -15,6 +22,8 @@ def test_inline_employee_report_and_approval(client, db, monkeypatch):
         'input_params': {'goal': '找出本周最重要的运营问题'},
     })
     assert r.status_code == 201, r.text
+    assert r.json()['status'] == 'queued'
+    r = client.get(f"/api/v1/companies/{company.id}/tasks/{r.json()['id']}", headers=auth_headers(owner))
     task = r.json()
     assert task['status'] == 'waiting_approval'
     assert task['output']['sections']
