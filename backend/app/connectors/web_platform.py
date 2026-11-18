@@ -71,13 +71,6 @@ def _save_session(company_id, platform, session):
                 # Never let a later empty iframe replace the authenticated page.
                 if previous is None or storage_score(snapshot) > storage_score(previous):
                     origins[snapshot['origin']] = snapshot
-        if platform == 'wechat_channels':
-            for snapshot in origins.values():
-                values = {entry['name']: entry['value'] for entry in snapshot.get('localStorage', [])}
-                if 'finder_raw' in values and not values['finder_raw']:
-                    # A cached API proof must not overwrite the last good snapshot
-                    # after the browser has already cleared its login token.
-                    return False
         state = {'cookies': session['context'].cookies(), 'origins': list(origins.values())}
         if identity.get('identity_verified'):
             state['account_identity'] = identity

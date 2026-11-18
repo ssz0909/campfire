@@ -156,9 +156,12 @@ def test_channels_anonymous_success_cannot_replace_authenticated_template():
     response.json.return_value = {'errCode': 0, 'data': {}}
     auth.api.observe_request(response, 'wechat_channels', session)
     assert session['metrics_api_templates']['identity'] == original
+    # Current Channels authenticates via cookies/header even with empty body tokens.
     response.json.return_value = payload('wechat_channels')
+    request.all_headers.return_value = {'content-type': 'application/json', 'x-wechat-uin': 'test'}
     auth.api.observe_request(response, 'wechat_channels', session)
-    assert session['metrics_api_templates']['identity'] == original
+    assert session['metrics_api_templates']['identity']['body']['rawKeyBuff'] == ''
+    assert session['metrics_api_templates']['identity']['headers']['x-wechat-uin'] == 'test'
 
 
 def test_channels_snapshot_prefers_authenticated_page_over_empty_iframe(monkeypatch, tmp_path):
@@ -178,5 +181,20 @@ def test_channels_snapshot_prefers_authenticated_page_over_empty_iframe(monkeypa
     before = path.read_bytes()
     page.frames = [frame('')]
     session['saved_at'] = 0
-    assert not web._save_session('company', 'wechat_channels', session)
-    assert path.read_bytes() == before
+    # Empty localStorage tokens are valid for cookie-based authenticated sessions.
+    assert web._save_session('company', 'wechat_channels', session)
+    assert decrypt_json(path.read_text())['account_identity']['identity_verified']
+
+
+def test_channels_empty_body_tokens_can_verify_and_persist(monkeypatch, tmp_path):
+    from app.core.secrets import decrypt_json
+    endpoint = template('wechat_channels')
+    endpoint['body'].update(rawKeyBuff='', pluginSessionId='')
+    transport(monkeypatch, lambda request: httpx.Response(201, json=payload('wechat_channels')))
+    state = auth.check('wechat_channels', cookies('wechat_channels'), endpoint, {})
+    assert state['publish_ready'] and state['identity_verified']
+    session = {'account_identity': state, 'metrics_api_templates': {'identity': endpoint},
+               'context': SimpleNamespace(cookies=lambda: cookies('wechat_channels'))}
+    auth.api.save_capture(tmp_path, 'wechat_channels', session)
+    saved = decrypt_json((tmp_path / 'metrics-api.enc').read_text())
+    assert saved['templates']['identity']['body']['rawKeyBuff'] == ''

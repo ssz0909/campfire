@@ -97,9 +97,6 @@ def observe_request(response, platform, session):
             # auth_data also returns success for anonymous/bootstrap requests.
             # Such requests must never replace a verified account template.
             return
-        if platform == 'wechat_channels' and any(
-                key in body and not body[key] for key in ('rawKeyBuff', 'pluginSessionId')):
-            return
         if kind == 'list':
             if platform == 'wechat_channels' and body.get('currentPage') not in (0, 1):
                 return
@@ -119,12 +116,6 @@ def save_capture(directory, platform, session):
     identity = session.get('account_identity') or {}
     if not identity.get('identity_verified') or not templates:
         return
-    if platform == 'wechat_channels':
-        templates = {kind: template for kind, template in templates.items()
-                     if not any(key in (template.get('body') or {}) and not template['body'][key]
-                                for key in ('rawKeyBuff', 'pluginSessionId'))}
-        if not templates:
-            return
     cookies = session['context'].cookies()
     signature = hashlib.sha256(json.dumps([templates, identity, cookies], sort_keys=True).encode()).hexdigest()
     if signature == session.get('metrics_api_saved_signature') and time.monotonic() - session.get('metrics_api_saved_at', 0) < 60:
