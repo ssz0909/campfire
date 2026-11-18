@@ -118,3 +118,9 @@
 排查官号时：会话文件仍在，Cookie未到本地过期时间，但身份接口返回300342；保存请求的rawKeyBuff/pluginSessionId为空，localStorage的finder_raw/finder_uin为空，刷新平台页面后为扫码页。不能凭Cookie存在判定可发布，也不能凭该错误码断言平台强制退出。已缺失的凭据无法恢复，需用户重新扫码。
 
 修复匿名成功响应覆盖身份请求、空令牌覆盖捕获配置、同源空白iframe覆盖有效存储的风险；接口暂不可用时保留会话已保存标签，身份未核验时仍禁止发布。64项后端与5项前端状态测试通过，前端构建通过。线上健康200，公网入口与PublishingView产物及两项后端文件校验一致。
+
+## 视频号空字段误判纠正（2026-11-18）
+
+源码8f3ce4d，发布目录/opt/campfire/releases/channels-cookie-20261118T034851Z，回退脚本/opt/campfire/backups/channels-cookie-20261118T034851Z/rollback.sh。仅更正两项后端文件，现网前端保留，切换前无活动发布、视频生成及员工任务。
+
+更正上一节结论：rawKeyBuff/pluginSessionId及finder_raw/finder_uin为空不能据此判定登录凭据丢失。用户重新扫码后，以隔离的浏览器配置副本实测，平台身份接口201/errCode=0并返回finderUsername，即使这些字段为空仍有效；同请求使用Cookie和x-wechat-uin头通过HTTP复核也成功。上一版空字段拦截过严导致真实已登录会话不能保存。已移除这些拦截，保留接口真实身份校验与匿名成功响应过滤。65项后端回归通过。已从用户本次登录的配置中恢复并再次验证与原绑定账号一致的会话，未触发发布或身份验证操作。
